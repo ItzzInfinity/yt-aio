@@ -31,3 +31,19 @@
 - Hardened the launcher to prefer `/usr/bin/python3 -m yt_dlp` when the module is available in the running app environment.
 - Preserved the active `yt_dlp` import path in `PYTHONPATH` whenever the auth fallback overrides `HOME`, so browser-cookie retries keep working.
 - Verified the fix locally with a Brave-cookie-backed live `-F` request for `https://www.youtube.com/watch?v=7V64PG7SnOE`, which now completes successfully and returns the format list.
+
+## 2026-04-24 16:55 IST
+
+- Implemented FSD section `1.7 Modularity` by reorganizing the package into `yt_aio/application/ui`, `yt_aio/application/utils`, `yt_aio/application/db`, `yt_aio/application/config`, and `yt_aio/application/logs`.
+- Split the old monolithic modules into focused files: UI in `main_window.py`, config handling in `config_manager.py`, metadata extraction in `video_info_extractor.py`, download orchestration in `download_manager.py`, and sqlite access in `database_manager.py`.
+- Moved runtime assets to portable package-relative locations: `application/config/config.json` and `application/db/yt_aio.db`.
+- Added compatibility wrappers at the old module paths so `run_yt_aio_gui.py` and existing imports still work during the transition.
+- Updated the stylesheet handling to load from `application/ui/styles.qss` and bumped the package version to `0.3.0`.
+
+## 2026-04-24 17:10 IST
+
+- Implemented FSD section `1.7.1` by changing `config.json` to store `log_file_path`, `history_file_path`, and `logs_directory` as relative paths instead of machine-specific absolute paths.
+- Added runtime path resolution in `config_manager.py` so relative config paths are resolved from the `yt_aio/application` base directory.
+- Updated the UI/runtime flow to keep raw config values for comparison and display while using resolved absolute paths internally for DB and filesystem operations.
+- Updated the download and yt-dlp helpers so relative path values like `cookie_file` or a relative download directory also resolve correctly.
+- Bumped the package version to `0.3.1`.
