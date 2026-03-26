@@ -200,3 +200,21 @@
       - `config`
         - `config.json` (config file for storing default settings)
     - `run_yt_aio_gui.py` (main script for running the UI and the functionality of the script)
+  ### 1.7.1. More thoughts on modularity
+  - I have moved the `run_yt_aio_gui.py` inn this directory so this BASE DIR can be moved anywhere and it will work without any issues as long as the dependencies are installed and the config file is set up properly inside the subdirectories. make it that way.
+  - I noticed that the `config.json` contains
+  - ```
+      "default_download_path": "/home/itzzinfinity/Downloads",
+      "log_file_path": "/home/itzzinfinity/Downloads/my_music/automation/yt_aio/application/db/yt_aio.db",
+      "history_file_path": "/home/itzzinfinity/Downloads/my_music/automation/yt_aio/application/db/yt_aio.db",
+      "logs_directory": "/home/itzzinfinity/Downloads/my_music/automation/yt_aio/application/logs"
+      ```
+
+  - these paths should be relative to the BASE DIR and not hardcoded to a specific directory. Need to change these paths in the config file and also in the code where these paths are being used to make it more flexible and modular. 
+  - ```
+      "default_download_path": "/home/itzzinfinity/Downloads",
+      "log_file_path": "./db/yt_aio.db",
+      "history_file_path": "./db/yt_aio.db",
+      "logs_directory": "./logs"
+  ``` 
+  - make it like this and also make sure that the code is using these relative paths instead of hardcoded paths to avoid any issues when the directory is moved to another location.
