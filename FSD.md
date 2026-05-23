@@ -218,3 +218,10 @@
       "logs_directory": "./logs"
   ``` 
   - make it like this and also make sure that the code is using these relative paths instead of hardcoded paths to avoid any issues when the directory is moved to another location.
+
+## 1.8. Feature Updates
+### 1.8.1. While Fetching the videos from the channel or playlist facing timeout error - need to make it sclable and make it work without any issues. 
+  - Need to check the code and see what is causing the issue in the main script.
+  - Need to check the logs and see what is causing the issue.
+  - Need to check the yt-dlp version and see if there are any updates available for yt-dlp and update it if necessary to see if it fixes the issue
+  - If these are fine then need to check how to get the --flat-playlist in chunks to avoid the timeout error and to make it more efficient and faster.
