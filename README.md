@@ -2,7 +2,7 @@
 
 PyQt desktop frontend for the existing YouTube automation scripts in this folder.
 
-Current version: `0.3.1`
+Current version: `0.3.2`
 
 ## What it does
 

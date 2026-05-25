@@ -47,3 +47,14 @@
 - Updated the UI/runtime flow to keep raw config values for comparison and display while using resolved absolute paths internally for DB and filesystem operations.
 - Updated the download and yt-dlp helpers so relative path values like `cookie_file` or a relative download directory also resolve correctly.
 - Bumped the package version to `0.3.1`.
+
+## 2026-05-23 20:30 IST
+
+- Implemented FSD point 1.8.1 (Strategy B) for scalable channel and playlist fetching.
+- Switched listing to a single streaming subprocess `yt-dlp --flat-playlist -j` that processes JSON lines as they arrive for instant visual feedback.
+- Completely removed `like_count`, `dislike_count`, `comment_count`, and `view_count` columns from the sqlite database schema to minimize database insertion and query overhead.
+- Added a safe automatic schema migration in `init_db` that drops these columns from existing user databases.
+- Updated metadata logging functions to batch write streamed records in a single database transaction.
+- Added the `is_full_metadata` column to track partial vs full metadata fetches, verifying caching states with boolean logic instead of checking if numerical columns are `None`.
+- Bumped package version to `0.3.2`.
+

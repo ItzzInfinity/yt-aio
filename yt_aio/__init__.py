@@ -1,6 +1,6 @@
 APP_NAME = "YT AIO"
-APP_VERSION = "0.3.1"
-APP_CHANGELOG = "Relative runtime paths in config resolved from the application base directory"
+APP_VERSION = "0.3.2"
+APP_CHANGELOG = "Scalable flat-playlist chunking and direct flat-playlist metadata caching in database"
 
 from .application.utils.config_manager import (
     CONFIG_PATH,

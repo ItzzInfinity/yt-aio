@@ -28,5 +28,7 @@
     "youtube_visitor_data": null,
     "youtube_remote_components": "ejs:github",
     "cookie_fallback_home": null,
-    "logs_directory": "./logs"
+    "logs_directory": "./logs",
+    "fetch_full_metadata": false,
+    "playlist_chunk_size": 100
 }

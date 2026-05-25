@@ -19,6 +19,7 @@ from ..db.database_manager import (
     get_cached_videos,
     log_error,
     log_video_info,
+    log_video_info_batch,
     upsert_source,
 )
 from .config_manager import resolve_runtime_path
@@ -226,7 +227,9 @@ def extract_audio_bitrate(formats: list[dict[str, Any]] | None) -> str:
 def _load_json_from_stdout(stdout: str) -> Any:
     for line in reversed([line.strip() for line in stdout.splitlines() if line.strip()]):
         try:
-            return json.loads(line)
+            val = json.loads(line)
+            if val is not None:
+                return val
         except json.JSONDecodeError:
             continue
     raise RuntimeError("yt-dlp did not return valid JSON output")
@@ -312,7 +315,7 @@ def _metadata_to_item(data: dict[str, Any], source_name: str) -> VideoItem:
         duration_seconds=data.get("duration"),
         duration_label=format_duration(data.get("duration")),
         available_bitrate=extract_audio_bitrate(data.get("formats")),
-        channel_name=data.get("channel") or "",
+        channel_name=data.get("channel") or data.get("uploader") or data.get("playlist_channel") or data.get("playlist_uploader") or "",
         source_name=source_name,
         upload_date=data.get("upload_date") or "",
         view_count=data.get("view_count"),
@@ -329,7 +332,7 @@ def _entry_to_item(entry: dict[str, Any], source_name: str) -> VideoItem:
         duration_seconds=entry.get("duration"),
         duration_label=format_duration(entry.get("duration")),
         available_bitrate="Unknown",
-        channel_name=entry.get("channel") or "",
+        channel_name=entry.get("channel") or entry.get("uploader") or entry.get("playlist_channel") or entry.get("playlist_uploader") or "",
         source_name=source_name,
         upload_date=entry.get("upload_date") or "",
         view_count=entry.get("view_count"),
@@ -365,18 +368,15 @@ def _log_video_metadata(
         {
             "video_id": data.get("id"),
             "title": data.get("title"),
-            "channel_name": data.get("channel"),
+            "channel_name": data.get("channel") or data.get("uploader") or data.get("playlist_channel") or data.get("playlist_uploader"),
             "playlist_name": source_name if source_kind == "playlist" else None,
             "upload_date": data.get("upload_date"),
             "duration": data.get("duration"),
-            "view_count": data.get("view_count"),
-            "like_count": data.get("like_count"),
-            "dislike_count": data.get("dislike_count"),
-            "comment_count": data.get("comment_count"),
             "thumbnail_url": data.get("thumbnail"),
             "video_url": data.get("webpage_url"),
             "source_id": source_id,
             "cached_at": now_string(),
+            "is_full_metadata": 1,
         },
     )
 
@@ -399,6 +399,193 @@ def fetch_video_metadata(
     )
 
 
+def _log_flat_video_metadata(
+    db_path: str,
+    entry: dict[str, Any],
+    source_kind: str,
+    source_name: str,
+    source_id: int | None,
+) -> int | None:
+    thumbnails = entry.get("thumbnails") or []
+    thumbnail_url = thumbnails[0].get("url") if thumbnails else None
+
+    duration = entry.get("duration")
+    if duration is not None:
+        try:
+            duration = int(float(duration))
+        except (ValueError, TypeError):
+            duration = None
+
+    video_url = entry.get("url") or entry.get("webpage_url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
+
+    return log_video_info(
+        db_path,
+        {
+            "video_id": entry.get("id"),
+            "title": entry.get("title"),
+            "channel_name": entry.get("channel") or entry.get("uploader") or entry.get("playlist_channel") or entry.get("playlist_uploader"),
+            "playlist_name": source_name if source_kind == "playlist" else None,
+            "upload_date": entry.get("upload_date"),
+            "duration": duration,
+            "thumbnail_url": thumbnail_url,
+            "video_url": video_url,
+            "source_id": source_id,
+            "cached_at": now_string(),
+            "is_full_metadata": 0,
+        },
+    )
+
+
+def _stream_flat_playlist(
+    cmd: list[str],
+    env: dict[str, str],
+    config: dict[str, Any],
+    source_kind: str,
+    source_value: str,
+    source_url: str,
+    source_key: str,
+    db_path: str,
+    logger: LogFn | None,
+    token: CancellationToken,
+) -> tuple[list[VideoItem], str, bool, str]:
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        env=env,
+    )
+    token.register(process)
+
+    raw_entries: list[dict[str, Any]] = []
+    hit_bot_checks = False
+    stderr_lines = []
+
+    try:
+        assert process.stdout is not None
+        while True:
+            if token.is_cancelled():
+                process.terminate()
+                safe_log(logger, f"[{now_string()}] Listing cancelled by user.")
+                break
+
+            line = process.stdout.readline()
+            if not line:
+                if process.poll() is not None:
+                    break
+                continue
+
+            cleaned_line = line.strip()
+            if not cleaned_line:
+                continue
+
+            try:
+                entry = json.loads(cleaned_line)
+                if entry and entry.get("id"):
+                    raw_entries.append(entry)
+                    if len(raw_entries) % 100 == 0:
+                        safe_log(logger, f"[{now_string()}] Streamed {len(raw_entries)} video entries...")
+            except json.JSONDecodeError:
+                stderr_lines.append(cleaned_line)
+                continue
+
+        if process.stderr:
+            for err_line in process.stderr:
+                stderr_lines.append(err_line.strip())
+
+        return_code = process.wait()
+        combined_err = "\n".join(stderr_lines)
+        if return_code != 0 and len(raw_entries) == 0:
+            if _should_retry_with_auth(combined_err, config, attempted_auth=False):
+                hit_bot_checks = True
+            return [], source_value.strip(), hit_bot_checks, combined_err
+
+        if not raw_entries:
+            return [], source_value.strip(), False, combined_err
+
+        source_name = source_value.strip()
+        for entry in raw_entries:
+            name = entry.get("playlist") or entry.get("playlist_title")
+            if name:
+                source_name = name
+                break
+
+        source_id = upsert_source(
+            db_path,
+            {
+                "source_key": source_key,
+                "source_kind": source_kind,
+                "source_name": source_name,
+                "source_value": source_value.strip(),
+                "source_url": source_url,
+                "created_at": now_string(),
+                "updated_at": now_string(),
+            },
+        )
+
+        video_ids = [entry["id"] for entry in raw_entries]
+        cached_video_map = get_cached_videos(db_path, video_ids)
+
+        uncached_indices = []
+        uncached_payloads = []
+        results: list[VideoItem | None] = [None] * len(raw_entries)
+
+        for i, entry in enumerate(raw_entries):
+            video_id = entry["id"]
+            cached_row = cached_video_map.get(video_id)
+            if cached_row:
+                cached_item = _cached_row_to_item(cached_row, source_name)
+                cached_item.source_id = cached_item.source_id or source_id
+                results[i] = cached_item
+            else:
+                uncached_indices.append(i)
+                thumbnails = entry.get("thumbnails") or []
+                thumbnail_url = thumbnails[0].get("url") if thumbnails else None
+                duration = entry.get("duration")
+                if duration is not None:
+                    try:
+                        duration = int(float(duration))
+                    except (ValueError, TypeError):
+                        duration = None
+                video_url = entry.get("url") or entry.get("webpage_url") or f"https://www.youtube.com/watch?v={video_id}"
+
+                payload = {
+                    "video_id": video_id,
+                    "title": entry.get("title"),
+                    "channel_name": entry.get("channel") or entry.get("uploader") or entry.get("playlist_channel") or entry.get("playlist_uploader"),
+                    "playlist_name": source_name if source_kind == "playlist" else None,
+                    "upload_date": entry.get("upload_date"),
+                    "duration": duration,
+                    "thumbnail_url": thumbnail_url,
+                    "video_url": video_url,
+                    "source_id": source_id,
+                    "cached_at": now_string(),
+                    "is_full_metadata": 0,
+                }
+                uncached_payloads.append(payload)
+
+        if uncached_payloads:
+            safe_log(
+                logger,
+                f"[{now_string()}] Cache hits: {len(raw_entries) - len(uncached_payloads)}. Caching {len(uncached_payloads)} new entries in database...",
+            )
+            inserted_ids = log_video_info_batch(db_path, uncached_payloads)
+
+            for index_in_uncached, original_idx in enumerate(uncached_indices):
+                entry = raw_entries[original_idx]
+                item = _entry_to_item(entry, source_name)
+                item.source_id = source_id
+                item.video_info_id = inserted_ids[index_in_uncached]
+                results[original_idx] = item
+
+        final_results = [r for r in results if r is not None]
+        return final_results, source_name, False, combined_err
+
+    finally:
+        token.unregister(process)
+
+
 def list_videos(
     source_kind: str,
     source_value: str,
@@ -409,131 +596,79 @@ def list_videos(
 ) -> tuple[list[VideoItem], str]:
     source_url = resolve_source_url(source_kind, source_value)
     source_key = f"{source_kind}:{source_value.strip()}"
-    source_id = upsert_source(
-        db_path,
-        {
-            "source_key": source_key,
-            "source_kind": source_kind,
-            "source_name": source_value.strip(),
-            "source_value": source_value.strip(),
-            "source_url": source_url,
-            "created_at": now_string(),
-            "updated_at": now_string(),
-        },
-    )
-    safe_log(logger, f"[{now_string()}] Loading {source_kind}: {source_url}")
 
-    source_data = run_json_command(
-        ["--flat-playlist", "--dump-single-json", source_url],
-        config=config,
-        retries=int(config.get("max_retries", 3)),
-        retry_delay=int(config.get("retry_delay", 5)),
-        timeout=None,
-        token=token,
-        logger=logger,
-        purpose=f"{source_kind} listing request",
+    attempted_auth = False
+    cmd_parts = ["--flat-playlist", "-j", "--extractor-args", "youtubetab:approximate_date", source_url]
+
+    cmd = build_yt_dlp_command(config, cmd_parts, use_auth=attempted_auth)
+    env = build_yt_dlp_env(config, use_auth=attempted_auth)
+
+    results, source_name, hit_bot, err = _stream_flat_playlist(
+        cmd, env, config, source_kind, source_value, source_url, source_key, db_path, logger, token
     )
 
-    entries = source_data.get("entries") or []
-    source_name = source_data.get("title") or source_value.strip()
-    source_id = upsert_source(
-        db_path,
-        {
-            "source_key": source_key,
-            "source_kind": source_kind,
-            "source_name": source_name,
-            "source_value": source_value.strip(),
-            "source_url": source_url,
-            "created_at": now_string(),
-            "updated_at": now_string(),
-        },
-    )
-    safe_log(logger, f"[{now_string()}] Found {len(entries)} entries in {source_name}")
+    if hit_bot and not token.is_cancelled():
+        safe_log(logger, f"[{now_string()}] Listing hit bot checks. Retrying with browser cookies...")
+        attempted_auth = True
+        cmd = build_yt_dlp_command(config, cmd_parts, use_auth=attempted_auth)
+        env = build_yt_dlp_env(config, use_auth=attempted_auth)
+        results, source_name, hit_bot, err = _stream_flat_playlist(
+            cmd, env, config, source_kind, source_value, source_url, source_key, db_path, logger, token
+        )
 
-    indexed_entries = [
-        (index, entry)
-        for index, entry in enumerate(entries)
-        if entry and entry.get("id")
-    ]
-    results: list[tuple[int, VideoItem]] = []
-    cached_video_map = get_cached_videos(db_path, [entry["id"] for _, entry in indexed_entries])
-    pending_entries = []
+    if not results and not token.is_cancelled():
+        raise RuntimeError(err or "yt-dlp flat-playlist command returned no videos")
 
-    for index, entry in indexed_entries:
-        cached_row = cached_video_map.get(entry["id"])
-        if cached_row:
-            cached_item = _cached_row_to_item(cached_row, source_name)
-            cached_item.source_id = cached_item.source_id or source_id
-            results.append((index, cached_item))
-            continue
-        pending_entries.append((index, entry))
+    fetch_full = bool(config.get("fetch_full_metadata", False))
+    if fetch_full and results and not token.is_cancelled():
+        video_ids = [item.video_id for item in results]
+        db_rows = get_cached_videos(db_path, video_ids)
 
-    safe_log(
-        logger,
-        f"[{now_string()}] Cache hits: {len(results)}. Fresh fetch required: {len(pending_entries)}.",
-    )
+        pending_items = []
+        for item in results:
+            row = db_rows.get(item.video_id)
+            if not row or not row.get("is_full_metadata"):
+                pending_items.append(item)
 
-    if not pending_entries:
-        ordered_items = [item for _, item in sorted(results, key=lambda pair: pair[0])]
-        safe_log(logger, f"[{now_string()}] Listing complete: {len(ordered_items)} videos ready.")
-        return ordered_items, source_name
+        if pending_items:
+            safe_log(logger, f"[{now_string()}] Fetching full metadata for {len(pending_items)} uncached videos...")
+            worker_count = min(max(1, int(config.get("max_metadata_workers", 4))), max(1, len(pending_items)))
+            video_to_index = {item.video_id: i for i, item in enumerate(results)}
 
-    worker_count = min(max(1, int(config.get("max_metadata_workers", 4))), max(1, len(pending_entries)))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_map = {
+                    executor.submit(fetch_video_metadata, item.video_id, config, token): item
+                    for item in pending_items
+                }
+                for completed_count, future in enumerate(as_completed(future_map), start=1):
+                    if token.is_cancelled():
+                        break
+                    old_item = future_map[future]
+                    video_id = old_item.video_id
+                    try:
+                        data = future.result()
+                        if data:
+                            new_item = _metadata_to_item(data, source_name)
+                            new_item.source_id = old_item.source_id
+                            new_item.video_info_id = _log_video_metadata(db_path, data, source_kind, source_name, old_item.source_id)
+                            idx = video_to_index[video_id]
+                            results[idx] = new_item
+                            safe_log(logger, f"[{now_string()}] Full metadata {completed_count}/{len(pending_items)}: {new_item.title}")
+                    except Exception as exc:
+                        safe_log(logger, f"[{now_string()}] Failed full metadata for {video_id}: {exc}")
+                        log_error(
+                            db_path,
+                            {
+                                "error_message": str(exc),
+                                "timestamp": now_string(),
+                                "stack_trace": traceback.format_exc(),
+                                "url": f"https://www.youtube.com/watch?v={video_id}",
+                                "action": "fetch_full_metadata",
+                                "user_input": source_value,
+                                "script_version": APP_VERSION,
+                                "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
+                            },
+                        )
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {
-            executor.submit(fetch_video_metadata, entry["id"], config, token): (index, entry)
-            for index, entry in pending_entries
-        }
-        for completed_count, future in enumerate(as_completed(future_map), start=1):
-            if token.is_cancelled():
-                safe_log(logger, f"[{now_string()}] Listing cancelled by user.")
-                break
-
-            index, entry = future_map[future]
-            video_id = entry["id"]
-            try:
-                data = future.result()
-                if not data:
-                    fallback_item = _entry_to_item(entry, source_name)
-                    results.append((index, fallback_item))
-                    safe_log(
-                        logger,
-                        f"[{now_string()}] Metadata missing for {video_id}. Using flat-playlist data.",
-                    )
-                    continue
-                item = _metadata_to_item(data, source_name)
-                if not item.url:
-                    item.url = f"https://www.youtube.com/watch?v={video_id}"
-                item.source_id = source_id
-                item.video_info_id = _log_video_metadata(db_path, data, source_kind, source_name, source_id)
-                results.append((index, item))
-                safe_log(
-                    logger,
-                    f"[{now_string()}] Metadata {completed_count}/{len(pending_entries)}: {item.title}",
-                )
-            except Exception as exc:
-                fallback_item = _entry_to_item(entry, source_name)
-                fallback_item.source_id = source_id
-                results.append((index, fallback_item))
-                safe_log(
-                    logger,
-                    f"[{now_string()}] Failed metadata for {video_id}: {exc}. Using flat-playlist data.",
-                )
-                log_error(
-                    db_path,
-                    {
-                        "error_message": str(exc),
-                        "timestamp": now_string(),
-                        "stack_trace": traceback.format_exc(),
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                        "action": "list_videos",
-                        "user_input": source_value,
-                        "script_version": APP_VERSION,
-                        "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
-                    },
-                )
-
-    ordered_items = [item for _, item in sorted(results, key=lambda pair: pair[0])]
-    safe_log(logger, f"[{now_string()}] Listing complete: {len(ordered_items)} videos ready.")
-    return ordered_items, source_name
+    safe_log(logger, f"[{now_string()}] Listing complete: {len(results)} videos ready.")
+    return results, source_name

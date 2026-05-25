@@ -79,6 +79,8 @@ def build_default_config() -> dict[str, Any]:
         "youtube_visitor_data": None,
         "youtube_remote_components": "ejs:github",
         "logs_directory": "./logs",
+        "fetch_full_metadata": False,
+        "playlist_chunk_size": 100,
     }
 
 

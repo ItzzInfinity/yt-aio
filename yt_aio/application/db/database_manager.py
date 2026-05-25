@@ -185,14 +185,11 @@ def init_db(db_path: str) -> None:
                 playlist_name TEXT,
                 upload_date TEXT,
                 duration INTEGER,
-                view_count INTEGER,
-                like_count INTEGER,
-                dislike_count INTEGER,
-                comment_count INTEGER,
                 thumbnail_url TEXT,
                 video_url TEXT,
                 source_id INTEGER,
                 cached_at TEXT,
+                is_full_metadata INTEGER DEFAULT 0,
                 FOREIGN KEY(source_id) REFERENCES sources(id)
             );
 
@@ -236,6 +233,7 @@ def init_db(db_path: str) -> None:
         _ensure_column(conn, "downloads", "source_id", "INTEGER")
         _ensure_column(conn, "youtube_video_information", "source_id", "INTEGER")
         _ensure_column(conn, "youtube_video_information", "cached_at", "TEXT")
+        _ensure_column(conn, "youtube_video_information", "is_full_metadata", "INTEGER DEFAULT 0")
 
         _ensure_index(
             conn,
@@ -274,6 +272,15 @@ def init_db(db_path: str) -> None:
         )
 
         _backfill_relations(conn)
+
+        # Drop columns no longer needed
+        columns = _table_columns(conn, "youtube_video_information")
+        for col in ["view_count", "like_count", "dislike_count", "comment_count"]:
+            if col in columns:
+                try:
+                    conn.execute(f"ALTER TABLE youtube_video_information DROP COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass
 
         existing = conn.execute(
             "SELECT id, changelog FROM yt_aio_version WHERE version_number = ?",
@@ -406,23 +413,19 @@ def log_video_info(db_path: str, payload: dict[str, Any]) -> int | None:
             """
             INSERT INTO youtube_video_information (
                 video_id, title, channel_name, playlist_name, upload_date, duration,
-                view_count, like_count, dislike_count, comment_count, thumbnail_url,
-                video_url, source_id, cached_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                thumbnail_url, video_url, source_id, cached_at, is_full_metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(video_id) DO UPDATE SET
                 title = excluded.title,
                 channel_name = excluded.channel_name,
                 playlist_name = excluded.playlist_name,
                 upload_date = excluded.upload_date,
                 duration = excluded.duration,
-                view_count = excluded.view_count,
-                like_count = excluded.like_count,
-                dislike_count = excluded.dislike_count,
-                comment_count = excluded.comment_count,
                 thumbnail_url = excluded.thumbnail_url,
                 video_url = excluded.video_url,
                 source_id = COALESCE(excluded.source_id, youtube_video_information.source_id),
-                cached_at = excluded.cached_at
+                cached_at = excluded.cached_at,
+                is_full_metadata = excluded.is_full_metadata
             """,
             (
                 video_id,
@@ -431,14 +434,11 @@ def log_video_info(db_path: str, payload: dict[str, Any]) -> int | None:
                 payload.get("playlist_name"),
                 payload.get("upload_date"),
                 payload.get("duration"),
-                payload.get("view_count"),
-                payload.get("like_count"),
-                payload.get("dislike_count"),
-                payload.get("comment_count"),
                 payload.get("thumbnail_url"),
                 payload.get("video_url"),
                 payload.get("source_id"),
                 payload.get("cached_at"),
+                payload.get("is_full_metadata", 0),
             ),
         )
         row = conn.execute(
@@ -446,6 +446,59 @@ def log_video_info(db_path: str, payload: dict[str, Any]) -> int | None:
             (video_id,),
         ).fetchone()
         return int(row["id"]) if row else None
+
+
+def log_video_info_batch(db_path: str, payloads: list[dict[str, Any]]) -> list[int | None]:
+    init_db(db_path)
+    if not payloads:
+        return []
+
+    ids: list[int | None] = []
+    with _connect(db_path) as conn:
+        for payload in payloads:
+            video_id = payload.get("video_id")
+            if not video_id:
+                ids.append(None)
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO youtube_video_information (
+                    video_id, title, channel_name, playlist_name, upload_date, duration,
+                    thumbnail_url, video_url, source_id, cached_at, is_full_metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    title = excluded.title,
+                    channel_name = excluded.channel_name,
+                    playlist_name = excluded.playlist_name,
+                    upload_date = excluded.upload_date,
+                    duration = excluded.duration,
+                    thumbnail_url = excluded.thumbnail_url,
+                    video_url = excluded.video_url,
+                    source_id = COALESCE(excluded.source_id, youtube_video_information.source_id),
+                    cached_at = excluded.cached_at,
+                    is_full_metadata = excluded.is_full_metadata
+                """,
+                (
+                    video_id,
+                    payload.get("title"),
+                    payload.get("channel_name"),
+                    payload.get("playlist_name"),
+                    payload.get("upload_date"),
+                    payload.get("duration"),
+                    payload.get("thumbnail_url"),
+                    payload.get("video_url"),
+                    payload.get("source_id"),
+                    payload.get("cached_at"),
+                    payload.get("is_full_metadata", 0),
+                ),
+            )
+            row = conn.execute(
+                "SELECT id FROM youtube_video_information WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+            ids.append(int(row["id"]) if row else None)
+    return ids
 
 
 def log_error(db_path: str, payload: dict[str, Any]) -> None:
