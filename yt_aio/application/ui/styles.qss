@@ -1,7 +1,7 @@
 QWidget {
     background: #12161c;
     color: #edf2f7;
-    font-family: "DejaVu Sans";
+    font-family: "fonts-dejavu-core";
     font-size: 13px;
 }
 
