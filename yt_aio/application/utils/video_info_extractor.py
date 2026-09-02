@@ -282,7 +282,7 @@ def run_json_command(
                 attempted_auth = True
                 safe_log(
                     logger,
-                    f"[{now_string()}] {purpose} hit YouTube bot checks. Retrying with browser cookies.",
+                    f"[{now_string()}] [WARN] {purpose} hit YouTube bot checks. Retrying with browser cookies.",
                 )
                 continue
 
@@ -297,7 +297,7 @@ def run_json_command(
                 attempted_auth = True
                 safe_log(
                     logger,
-                    f"[{now_string()}] {purpose} hit YouTube bot checks. Retrying with browser cookies.",
+                    f"[{now_string()}] [WARN] {purpose} hit YouTube bot checks. Retrying with browser cookies.",
                 )
                 continue
             time.sleep(max(0, retry_delay))
@@ -467,7 +467,7 @@ def _stream_flat_playlist(
         while True:
             if token.is_cancelled():
                 process.terminate()
-                safe_log(logger, f"[{now_string()}] Listing cancelled by user.")
+                safe_log(logger, f"[{now_string()}] [WARN] Listing cancelled by user.")
                 break
 
             line = process.stdout.readline()
@@ -485,7 +485,7 @@ def _stream_flat_playlist(
                 if entry and entry.get("id"):
                     raw_entries.append(entry)
                     if len(raw_entries) % 100 == 0:
-                        safe_log(logger, f"[{now_string()}] Streamed {len(raw_entries)} video entries...")
+                        safe_log(logger, f"[{now_string()}] [INFO] Streamed {len(raw_entries)} video entries...")
             except json.JSONDecodeError:
                 stderr_lines.append(cleaned_line)
                 continue
@@ -568,7 +568,7 @@ def _stream_flat_playlist(
         if uncached_payloads:
             safe_log(
                 logger,
-                f"[{now_string()}] Cache hits: {len(raw_entries) - len(uncached_payloads)}. Caching {len(uncached_payloads)} new entries in database...",
+                f"[{now_string()}] [INFO] Cache hits: {len(raw_entries) - len(uncached_payloads)}. Caching {len(uncached_payloads)} new entries in database...",
             )
             inserted_ids = log_video_info_batch(db_path, uncached_payloads)
 
@@ -608,7 +608,7 @@ def list_videos(
     )
 
     if hit_bot and not token.is_cancelled():
-        safe_log(logger, f"[{now_string()}] Listing hit bot checks. Retrying with browser cookies...")
+        safe_log(logger, f"[{now_string()}] [WARN] Listing hit bot checks. Retrying with browser cookies...")
         attempted_auth = True
         cmd = build_yt_dlp_command(config, cmd_parts, use_auth=attempted_auth)
         env = build_yt_dlp_env(config, use_auth=attempted_auth)
@@ -631,7 +631,7 @@ def list_videos(
                 pending_items.append(item)
 
         if pending_items:
-            safe_log(logger, f"[{now_string()}] Fetching full metadata for {len(pending_items)} uncached videos...")
+            safe_log(logger, f"[{now_string()}] [INFO] Fetching full metadata for {len(pending_items)} uncached videos...")
             worker_count = min(max(1, int(config.get("max_metadata_workers", 4))), max(1, len(pending_items)))
             video_to_index = {item.video_id: i for i, item in enumerate(results)}
 
@@ -653,9 +653,9 @@ def list_videos(
                             new_item.video_info_id = _log_video_metadata(db_path, data, source_kind, source_name, old_item.source_id)
                             idx = video_to_index[video_id]
                             results[idx] = new_item
-                            safe_log(logger, f"[{now_string()}] Full metadata {completed_count}/{len(pending_items)}: {new_item.title}")
+                            safe_log(logger, f"[{now_string()}] [INFO] Full metadata {completed_count}/{len(pending_items)}: {new_item.title}")
                     except Exception as exc:
-                        safe_log(logger, f"[{now_string()}] Failed full metadata for {video_id}: {exc}")
+                        safe_log(logger, f"[{now_string()}] [WARN] Failed full metadata for {video_id}: {exc}")
                         log_error(
                             db_path,
                             {
@@ -670,5 +670,5 @@ def list_videos(
                             },
                         )
 
-    safe_log(logger, f"[{now_string()}] Listing complete: {len(results)} videos ready.")
+    safe_log(logger, f"[{now_string()}] [INFO] Listing complete: {len(results)} videos ready.")
     return results, source_name

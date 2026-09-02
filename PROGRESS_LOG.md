@@ -58,3 +58,89 @@
 - Added the `is_full_metadata` column to track partial vs full metadata fetches, verifying caching states with boolean logic instead of checking if numerical columns are `None`.
 - Bumped package version to `0.3.2`.
 
+## 2026-09-02 21:10 IST
+
+- Implemented FSD point `1.7.2` by reading `dev_guide.md` and writing `Docs/05_TAB_SHELL_MIGRATION.md`.
+- Mapped every placeholder in `dev_guide.md` onto this tree: `suite/` is `yt_aio/application`, the missing `shell.py`
+  is the `AppShell` plus tab bar, and the guide's file-based cross-panel contract is `yt_aio.db` here.
+- Listed the changes needed to move the current window into one `Downloader` tab: extract the PyQt6/PyQt5
+  compatibility block into `ui/qt.py`, lift config and database state out of the window into an `AppContext` helper,
+  split `main_window.py` into `features/downloader/panel.py` and `features/downloader/worker.py`, and add
+  `application/shell.py` as the only `QMainWindow`.
+- Recorded the panel-contract violations to fix while moving: `QMainWindow` subclassing, `setStyleSheet` on the panel,
+  `ensure_config` and `init_db` running inside the constructor, `assert` used for validation in the worker, the mirrored
+  `set_busy_state` and `set_idle_state` pair, and the absent `closeEvent` that destroys a running `QThread`.
+- Recorded one correctness bug found in the code being moved: `on_load_complete` rebuilds the cache key by re-reading
+  the source widgets at completion time, so editing the source field during a listing files the result under the wrong key.
+- Documented the expected output after the migration: the new tree, the window with a single styled tab, the behaviour
+  that must stay identical, the four new behaviours, verification commands, and the guide's smoke-test checklist.
+- Fixed the roster and left-to-right order for the FSD `1.8.2` tabs: Import, Downloader, Library, Logs, Settings.
+- No application code changed, so the version stays `0.3.2`. The bump to `0.4.0` belongs to the migration commit itself.
+
+## 2026-09-02 21:30 IST
+
+- Executed the FSD `1.7.2` plan in `Docs/05_TAB_SHELL_MIGRATION.md`: the app is now a tab shell and the existing UI is
+  the `Downloader` tab. Version bumped to `0.4.0` and recorded in the `yt_aio_version` table.
+- Added `application/shell.py` with `AppShell`, the only `QMainWindow` in the process, owning a `QTabWidget` and `main()`.
+- Added `application/context.py` with `AppContext`, holding the config path, raw config, resolved config and database
+  path for the whole process, plus a `config_changed` signal so future tabs never call each other.
+- Added `application/ui/qt.py` as the single PyQt6-with-PyQt5-fallback import site, so a new panel does not re-create
+  the fallback block.
+- Split `application/ui/main_window.py` into `features/downloader/panel.py` and `features/downloader/worker.py`, and
+  deleted the old module.
+- `MainWindow(QMainWindow)` became `DownloaderPanel(QWidget)`: no window title, no resize, no `setStyleSheet` on
+  itself, and no `ensure_config` or `init_db` in the constructor. Both now run in `main()` before any panel is built.
+- Folded `set_busy_state` and `set_idle_state` into one `_set_busy`, and added the table to what it disables so the
+  selection cannot change during a running download.
+- Fixed a real bug found while moving the code: `on_load_complete` rebuilt the cache key by re-reading the source
+  widgets at completion time, so editing the source field during a listing filed the result under the wrong key and
+  the next click could download the previous source. The kind and value now travel on the `load_complete` signal.
+- Added `shutdown()` on the panel and a `closeEvent` on the shell, so closing the window during a download cancels the
+  job and waits for the thread instead of destroying a running `QThread`.
+- Adopted the `[TX]` `[RX]` `[INFO]` `[WARN]` `[ERR]` console vocabulary, tagged at the source in the panel and in the
+  utils layer. `run_streaming_command` now logs one `[TX]` line per launched subprocess with the program name and the
+  target only, never the full argument list, so cookie and visitor-data values are not written to the log.
+- Deleted the transitional compatibility wrappers `yt_aio/gui.py`, `services.py`, `config.py`, `logging_db.py` and
+  `run.py`, and reduced `yt_aio/__init__.py` to metadata. `python3 -m yt_aio` is unchanged.
+- Added `QTabWidget` and `QTabBar` rules to `styles.qss`, since the sheet had none and a tab bar would otherwise have
+  rendered in the default light palette.
+- Verified headless with the offscreen Qt platform: the panel constructs against a context pointing at non-existent
+  paths, the shell shows one `Downloader` tab, the busy and idle transitions are correct on both the completion and
+  failure paths, an empty Download gives one warning line and no traceback, a real `QThread` job populates the table
+  through the widened `load_complete` signal, and the window closes cleanly.
+
+## 2026-09-02 22:05 IST
+
+- Implemented FSD point `1.8.2` (Tabs as Containers). Version bumped to `0.5.0`. The window now carries five tabs in
+  workflow order: Import, Downloader, Library, Logs and Settings, opening on Downloader.
+- Added `application/features/importer/` with `parsers.py` and `panel.py`. The parser detects the format from the
+  file's own bytes rather than its extension, and handles SQLite databases, ZIP archives, JSON, CSV and plain text.
+  A NewPipe-shaped export, millisecond durations and `mm:ss` durations all parse correctly.
+- The Import tab either merges parsed items into `youtube_video_information` under an `import:<file>` source, or
+  downloads them directly. The merge never overwrites a richer stored record with a sparser backup entry.
+- Added `application/features/library/panel.py`: paged browsing of the cached rows with search, source and status
+  filters, and deletion of ticked rows behind a confirmation that names the targets and states what is kept.
+  Deleting metadata clears the download rows' link to it rather than destroying the download history.
+- Added `application/features/logs/panel.py`: a read-only view over the download history, errors with their stack
+  traces, user actions, settings changes and the version table, with search, paging and a record detail pane.
+- Added `application/features/settings/panel.py`: `config.json` edited from a form generated out of
+  `build_default_config`, so a new setting appears with no change to the panel. Saving writes atomically, records
+  every change through `AppContext.reload_if_changed`, and tells the other tabs through `config_changed`.
+- Added `application/db/queries.py` for the read and delete path, keeping `database_manager.py` to the schema and the
+  downloader's write path. Table and column names come only from the view specs, never from user input.
+- Moved `TaskThread` from `features/downloader/worker.py` to the shared `application/jobs.py` once the Import tab
+  became a second caller, and added `CallableThread` there for the parse and merge jobs. Panels share the runner
+  rather than importing each other.
+- Added `application/ui/widgets.py` with `ConsoleView` and `RecordTable`, so a new tab does not copy a first tab's
+  widget code. The Downloader now uses `ConsoleView` too.
+- Redacted credential-shaped config values, `youtube_visitor_data` and `proxy`, from the `settings_changes` table and
+  the console. The real value is still written to `config.json`; only the audit record is masked.
+- Every read is paged in SQL. The 3462-row cache is never loaded whole, and the panels defer their first database read
+  to their first paint so no constructor touches the disk.
+- Verified headless under both bindings: all five tabs build under PyQt6 and under PyQt5, the Logs views page and
+  filter, the Library filters and paging are correct, deletion is refused with nothing ticked and confirmed with
+  specifics otherwise, the Settings form has 32 editors and its save round-trips through the config file and the
+  change log with the token redacted, and the Import tab parses a ZIP fixture and merges 7 videos.
+- The destructive tests ran against a copied config and a copied database. One earlier test run leaked 7 fixture rows
+  into the real database, because saving settings correctly makes AppContext re-derive its database path from the
+  config; those rows, their source row and the stray user action were removed and the counts verified back at 3462.

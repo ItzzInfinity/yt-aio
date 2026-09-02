@@ -19,7 +19,7 @@ PyQt applications operate on a single **Main UI Thread** that runs the Qt Event 
 To prevent this, YT-AIO uses a **Worker Thread model**:
 
 - **Main UI Thread**: Listens to clicks, parses textbox entries, updates status labels, updates table grids, and reacts to incoming signals from background workers.
-- **Worker Thread ([TaskThread](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/ui/main_window.py#L35))**: Spawns an independent OS thread using `QThread` to execute the listing (`list_videos`) or batch downloading (`download_many`) logic.
+- **Worker Thread ([TaskThread](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/jobs.py))**: Spawns an independent OS thread using `QThread` to execute the listing (`list_videos`) or batch downloading (`download_many`) logic.
 - **Services Thread Pool**: Inside the background worker, heavy processes spawn child threads using python's `ThreadPoolExecutor` (e.g. up to 4 parallel workers for metadata fetches, and up to `CPU cores - 2` parallel workers for active subprocess downloads).
 
 ![Threading Model](diagrams/threading_model.png)
@@ -32,14 +32,14 @@ Inter-thread communication is managed using Qt's thread-safe **Signals & Slots**
 sequenceDiagram
     autonumber
     actor User
-    participant MainWindow as UI Main Thread
+    participant DownloaderPanel as UI Main Thread
     participant TaskThread as Worker QThread
     participant Extractor as VideoInfoExtractor
     participant DB as SQLite Cache
 
-    User->>MainWindow: Click Download Button
-    MainWindow->>MainWindow: Set state to BUSY (Loading...)
-    MainWindow->>TaskThread: Instantiate & call start()
+    User->>DownloaderPanel: Click Download Button
+    DownloaderPanel->>DownloaderPanel: Set state to BUSY (Loading...)
+    DownloaderPanel->>TaskThread: Instantiate & call start()
     Note over TaskThread: QThread spawns new OS thread
     TaskThread->>Extractor: call list_videos()
     Extractor->>DB: Scan existing cached IDs
@@ -47,9 +47,9 @@ sequenceDiagram
     Note over Extractor: Run yt-dlp flat-playlist for missing IDs
     Extractor->>DB: Write new metadata to cache
     Extractor-->>TaskThread: Return VideoItem list
-    TaskThread-->>MainWindow: Emit load_complete(items) signal
-    MainWindow->>MainWindow: Populate grid table
-    MainWindow->>MainWindow: Set state to IDLE (Ready)
+    TaskThread-->>DownloaderPanel: Emit load_complete(items) signal
+    DownloaderPanel->>DownloaderPanel: Populate grid table
+    DownloaderPanel->>DownloaderPanel: Set state to IDLE (Ready)
     Note over TaskThread: Worker thread shuts down safely
 ```
 
@@ -60,10 +60,10 @@ sequenceDiagram
 When a download is running in the background, a user can click the **Stop** button. Because the downloader is executing child processes (`subprocess.Popen`), the cancellation must thread-safely propagate down and terminate these processes.
 
 This is managed by the **[CancellationToken](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/utils/shared.py#L42)** class:
-1. When a task starts, `MainWindow` instantiates a `CancellationToken` and passes it to the `TaskThread`.
+1. When a task starts, `DownloaderPanel` instantiates a `CancellationToken` and passes it to the `TaskThread`.
 2. As the worker runs, any active subprocess register themselves into the token using `token.register(process)`.
 3. If the user clicks **Stop**:
-   - `MainWindow` calls `cancel_token.cancel()`.
+   - `DownloaderPanel` calls `cancel_token.cancel()`.
    - The token sets a thread-safe boolean flag `_cancelled = True`.
    - The token loops through all registered processes and calls `process.kill()` directly.
 4. The background loops check `if token.is_cancelled():` and raise a `CancelledError` to abort operations cleanly.
@@ -108,7 +108,7 @@ The data moves through several cache checks and subprocess pipelines before load
 ![Data Flow Diagram](diagrams/data_flow.png)
 
 1. **Input Stage**: User enters `@vsauce` and clicks **Download**.
-2. **Path Selection**: `MainWindow` detects that no data is loaded yet and triggers `start_load(source_kind="channel", source_value="@vsauce")`.
+2. **Path Selection**: `DownloaderPanel` detects that no data is loaded yet and triggers `start_load(source_kind="channel", source_value="@vsauce")`.
 3. **Subprocess Call (Flat Scrape)**: `list_videos()` builds and runs:
    ```bash
    yt-dlp --flat-playlist --dump-single-json "https://www.youtube.com/@vsauce"

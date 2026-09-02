@@ -1,4 +1,4 @@
-from .application.ui.main_window import main
+from .application.shell import main
 
 
 if __name__ == "__main__":

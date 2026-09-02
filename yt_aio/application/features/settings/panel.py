@@ -1,0 +1,274 @@
+"""Settings panel.
+
+Owns:   the Settings tab.
+Reads:  application/config/config.json, through AppContext.
+Writes: application/config/config.json, and settings_changes rows by way of
+        AppContext.reload_if_changed.
+Runs:   nothing (dev_guide.md 5, Pattern E).
+
+Editors are built from the default config, so a key added to build_default_config
+appears here with no change to this file. Types come from the default value, which is
+also what decides how the edited value is written back.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from ...context import SENSITIVE_KEYS, AppContext
+from ...ui.qt import (
+    ALIGN_TOP,
+    MB_NO,
+    MB_YES,
+    QCheckBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+    pyqtSlot,
+)
+from ...ui.widgets import muted
+from ...utils.config_manager import build_default_config
+
+DIRECTORY_KEYS = {"default_download_path", "logs_directory", "cookie_fallback_home"}
+FILE_KEYS = {"log_file_path", "history_file_path", "cookie_file"}
+
+HELP = {
+    "default_download_path": "Where finished media is written.",
+    "log_file_path": "SQLite database. A relative path resolves from yt_aio/application.",
+    "history_file_path": "Usually the same database as log_file_path.",
+    "logs_directory": "Reserved for file-based logs. Relative paths resolve from yt_aio/application.",
+    "max_concurrent_downloads": "How many downloads run at once.",
+    "max_metadata_workers": "How many metadata fetches run at once.",
+    "playlist_chunk_size": "How many flat-playlist entries are handled per batch.",
+    "fetch_full_metadata": "Off keeps listing fast and stores partial metadata only.",
+    "cookie_fallback_enabled": "Retry with browser cookies when YouTube raises a bot check.",
+    "youtube_visitor_data": "Token used for some YouTube requests. Kept out of the change log.",
+}
+
+
+class SettingsPanel(QWidget):
+    """One tab. Constructed once at start-up and never destroyed."""
+
+    def __init__(self, parent: QWidget | None = None, *, context: AppContext) -> None:
+        super().__init__(parent)
+
+        # ---- 1. state
+        self._ctx = context
+        self._defaults = build_default_config()
+        self._editors: dict[str, QWidget] = {}
+        self._built = False
+
+        # ---- 2. widgets
+        self.form_host = QWidget()
+        self.form = QFormLayout(self.form_host)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidget(self.form_host)
+
+        self.save_button = QPushButton("Save")
+        self.reload_button = QPushButton("Reload from file")
+        self.defaults_button = QPushButton("Reset to defaults")
+        self.path_label = muted("")
+        self.status_label = muted("")
+
+        # ---- 3. layout
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.save_button)
+        button_row.addWidget(self.reload_button)
+        button_row.addWidget(self.defaults_button)
+        button_row.addStretch(1)
+
+        box = QGroupBox("Configuration")
+        box_layout = QVBoxLayout(box)
+        box_layout.addWidget(self.path_label)
+        box_layout.addWidget(self.scroll, 1)
+
+        root = QVBoxLayout(self)
+        root.addWidget(box, 1)
+        root.addLayout(button_row)
+        root.addWidget(self.status_label)
+
+        # ---- 4. signals
+        self.save_button.clicked.connect(self._save)
+        self.reload_button.clicked.connect(self._reload_from_file)
+        self.defaults_button.clicked.connect(self._reset_to_defaults)
+        self._ctx.config_changed.connect(self._on_config_changed)
+
+        # ---- 5. initial state. Editors are built on the first paint, not here, so
+        # the constructor stays free of file reads.
+        self.path_label.setText(str(self._ctx.config_path))
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        if not self._built:
+            self._built = True
+            self._build_form(self._ctx.raw_config)
+
+    # ------------------------------------------------------------------ helpers
+    def _ordered_keys(self, config: dict[str, Any]) -> list[str]:
+        """Defaults first, in their declared order, then anything the file adds."""
+        keys = [key for key in self._defaults if key in config or key in self._defaults]
+        keys += [key for key in config if key not in self._defaults]
+        return keys
+
+    def _make_editor(self, key: str, value: Any) -> QWidget:
+        default = self._defaults.get(key)
+        if isinstance(default, bool) or isinstance(value, bool):
+            editor = QCheckBox()
+            editor.setChecked(bool(value))
+            return editor
+        if isinstance(default, int) and not isinstance(default, bool):
+            editor = QSpinBox()
+            editor.setRange(0, 1_000_000)
+            try:
+                editor.setValue(int(value))
+            except (TypeError, ValueError):
+                editor.setValue(int(default))
+            return editor
+
+        editor = QLineEdit("" if value is None else str(value))
+        editor.setPlaceholderText("empty means not set" if default is None else str(default))
+        return editor
+
+    def _row_widget(self, key: str, editor: QWidget) -> QWidget:
+        """Wrap an editor, adding a Browse button for the keys that name a path."""
+        if key not in DIRECTORY_KEYS and key not in FILE_KEYS:
+            return editor
+
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(editor, 1)
+        browse = QPushButton("Browse...")
+        row.addWidget(browse)
+        browse.clicked.connect(lambda _=False, k=key, e=editor: self._browse(k, e))
+        return host
+
+    def _build_form(self, config: dict[str, Any]) -> None:
+        while self.form.count():
+            item = self.form.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._editors.clear()
+
+        for key in self._ordered_keys(config):
+            value = config.get(key, self._defaults.get(key))
+            editor = self._make_editor(key, value)
+            self._editors[key] = editor
+            label_text = key if key not in HELP else f"{key}\n{HELP[key]}"
+            label = QLabel(label_text)
+            label.setWordWrap(True)
+            self.form.addRow(label, self._row_widget(key, editor))
+
+        self.path_label.setText(str(self._ctx.config_path))
+
+    def _collect(self) -> dict[str, Any]:
+        """Read the editors back into a config dictionary, keyed by the default's type."""
+        collected: dict[str, Any] = {}
+        for key, editor in self._editors.items():
+            default = self._defaults.get(key)
+            if isinstance(editor, QCheckBox):
+                collected[key] = editor.isChecked()
+            elif isinstance(editor, QSpinBox):
+                collected[key] = int(editor.value())
+            else:
+                text = editor.text().strip()
+                if not text:
+                    # A key whose default is a string keeps an empty string; a key whose
+                    # default is None becomes null, which is what the utils layer expects.
+                    collected[key] = "" if isinstance(default, str) else None
+                else:
+                    collected[key] = text
+        return collected
+
+    def _write_atomically(self, payload: dict[str, Any]) -> None:
+        """Write beside the target and rename in, so a reader never sees a half file."""
+        target = Path(self._ctx.config_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(target.name + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+        os.replace(temporary, target)
+
+    def _log(self, tag: str, message: str) -> None:
+        self.status_label.setText(f"[{tag}] {message}")
+
+    # ------------------------------------------------------------------- slots
+    @pyqtSlot()
+    def _browse(self, key: str, editor: QLineEdit) -> None:
+        current = editor.text().strip() or str(Path.home())
+        if key in DIRECTORY_KEYS:
+            chosen = QFileDialog.getExistingDirectory(self, f"Choose a directory for {key}", current)
+        else:
+            chosen, _ = QFileDialog.getOpenFileName(self, f"Choose a file for {key}", current)
+        if chosen:
+            editor.setText(chosen)
+
+    @pyqtSlot()
+    def _save(self) -> None:
+        payload = self._collect()
+        try:
+            json.dumps(payload)
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Cannot save", f"The settings do not serialise: {exc}")
+            return
+
+        changed = [
+            key for key, value in payload.items()
+            if self._ctx.raw_config.get(key) != value
+        ]
+        if not changed:
+            self._log("INFO", "Nothing changed.")
+            return
+
+        try:
+            self._write_atomically(payload)
+        except OSError as exc:
+            QMessageBox.critical(self, "Cannot write the config", str(exc))
+            self._log("ERR", f"Could not write {self._ctx.config_path}: {exc}")
+            return
+
+        # reload_if_changed records every changed key in settings_changes, re-inits the
+        # database if its path moved, and tells the other tabs.
+        self._ctx.reload_if_changed(self._log)
+        shown = ", ".join(key for key in changed if key not in SENSITIVE_KEYS)
+        self._log("INFO", f"Saved {len(changed)} change(s) to {self._ctx.config_path}. {shown}".strip())
+
+    @pyqtSlot()
+    def _reload_from_file(self) -> None:
+        self._ctx.reload_if_changed(self._log)
+        self._build_form(self._ctx.raw_config)
+        self._log("INFO", f"Reloaded from {self._ctx.config_path}")
+
+    @pyqtSlot()
+    def _reset_to_defaults(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Reset to defaults",
+            "Fill every field with its built-in default?\n\n"
+            "Nothing is written until you press Save, so you can still back out.",
+            MB_YES | MB_NO,
+            MB_NO,
+        )
+        if answer != MB_YES:
+            return
+        self._build_form(dict(self._defaults))
+        self._log("INFO", "Fields filled with the built-in defaults. Press Save to keep them.")
+
+    @pyqtSlot()
+    def _on_config_changed(self) -> None:
+        """Another tab or an external edit changed the file. Show what is on disk now."""
+        if self._built:
+            self._build_form(self._ctx.raw_config)

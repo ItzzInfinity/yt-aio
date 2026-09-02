@@ -110,3 +110,104 @@ QProgressBar::chunk {
     background: #2f81f7;
     border-radius: 8px;
 }
+
+QTabWidget::pane {
+    background: #12161c;
+    border: 1px solid #2c3440;
+    border-radius: 10px;
+    top: -1px;
+}
+
+QTabBar {
+    background: transparent;
+}
+
+QTabBar::tab {
+    background: #1a2029;
+    color: #9fb0c3;
+    border: 1px solid #2c3440;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 8px 18px;
+    margin-right: 4px;
+    font-weight: 600;
+}
+
+QTabBar::tab:hover {
+    background: #232c38;
+    color: #dce7f2;
+}
+
+QTabBar::tab:selected {
+    background: #12161c;
+    color: #edf2f7;
+    border-color: #2c3440;
+    border-bottom: 2px solid #1f6feb;
+}
+
+QComboBox {
+    background: #0f141b;
+    color: #edf2f7;
+    border: 1px solid #2c3440;
+    border-radius: 8px;
+    padding: 6px 10px;
+    min-width: 120px;
+}
+
+QComboBox:hover {
+    border-color: #3a4757;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+
+QComboBox QAbstractItemView {
+    background: #0f141b;
+    color: #edf2f7;
+    border: 1px solid #2c3440;
+    selection-background-color: #2e5b88;
+    selection-color: #ffffff;
+    outline: none;
+}
+
+QSpinBox {
+    background: #0f141b;
+    color: #edf2f7;
+    border: 1px solid #2c3440;
+    border-radius: 8px;
+    padding: 5px 6px;
+    min-width: 70px;
+}
+
+QCheckBox {
+    spacing: 8px;
+    padding: 2px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #3a4757;
+    border-radius: 4px;
+    background: #0f141b;
+}
+
+QCheckBox::indicator:checked {
+    background: #1f6feb;
+    border-color: #1f6feb;
+}
+
+QScrollArea {
+    border: none;
+}
+
+QSplitter::handle {
+    background: #1e2630;
+}
+
+QLabel[role="muted"] {
+    color: #9fb0c3;
+}

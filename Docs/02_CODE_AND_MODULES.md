@@ -12,18 +12,35 @@ For a beginner, finding code inside modular folders can be tricky. Use this refe
 yt_aio/
 ├── __main__.py                      # Entry point: python3 -m yt_aio
 ├── run.py                           # Legacy entry script
-├── services.py                      # Root wrapper exporting core functions for compatibility
-│
 └── application/                     # Parent directory of all modular logic
+    ├── shell.py                      # AppShell: the one window and the tab bar, plus main()
+    ├── context.py                    # AppContext: shared config, db path, config_changed signal
+    ├── jobs.py                       # TaskThread and CallableThread, shared by every tab
+    │
+    ├── features/                     # One subpackage per tab
+    │   ├── importer/
+    │   │   ├── panel.py              # ImportPanel: the Import tab
+    │   │   └── parsers.py            # Backup file format detection and parsing
+    │   ├── downloader/
+    │   │   └── panel.py              # DownloaderPanel: the Downloader tab
+    │   ├── library/
+    │   │   └── panel.py              # LibraryPanel: browse and delete cached rows
+    │   ├── logs/
+    │   │   └── panel.py              # LogsPanel: read-only history, errors, actions
+    │   └── settings/
+    │       └── panel.py              # SettingsPanel: edit config.json from a form
+    │
     ├── config/
     │   └── config.json              # Default user settings
     │
     ├── db/
-    │   └── database_manager.py      # SQLite table scripts and log queries
+    │   ├── database_manager.py      # SQLite schema and the downloader's write path
+    │   └── queries.py               # The read and delete path the viewing tabs share
     │
     ├── ui/
-    │   ├── main_window.py           # GUI layouts, widget events, and QThread worker
-    │   └── styles.qss               # Application styling stylesheet
+    │   ├── qt.py                    # The single PyQt6/PyQt5 fallback import site
+    │   ├── widgets.py               # ConsoleView and RecordTable, shared by the tabs
+    │   └── styles.qss               # Application styling stylesheet, applied once by the shell
     │
     └── utils/
         ├── config_manager.py        # Validates config.json, translates relative paths
@@ -34,20 +51,33 @@ yt_aio/
 
 ---
 
-## 2. UI Presentation Layer: `application/ui/main_window.py`
+## 2. Shell Layer: `application/shell.py`
 
-File Scheme Link: [main_window.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/ui/main_window.py)
+`AppShell` is the only `QMainWindow` in the process. It does three things and nothing else: import the panel
+classes, construct them, and add each one to the `QTabWidget` with a label. It also applies `styles.qss` once at
+application level and calls each panel's `shutdown()` on close so no `QThread` is destroyed while running.
+
+`main()` prepares the configuration and the database schema **before** any panel is built, so a panel constructor
+never does blocking or failure-prone work. Adding a tab is an import, a constructor call and one `addTab` line.
+
+---
+
+## 3. UI Presentation Layer: `application/features/downloader/panel.py`
+
+File Scheme Link: [panel.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/features/downloader/panel.py)
+
+> The window itself lives in [shell.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/shell.py). This module is one tab inside it. See [05_TAB_SHELL_MIGRATION.md](05_TAB_SHELL_MIGRATION.md) for the panel contract a new tab must satisfy.
 
 This module handles the PyQt layout and captures button click events. It communicates with the backend files via background **worker threads**.
 
-### Class: `MainWindow`
-This is the main graphical frame. It inherits from `QMainWindow`.
+### Class: `DownloaderPanel`
+This is the Downloader tab. It inherits from `QWidget`, never `QMainWindow`: the shell owns the window.
 
-#### Pseudo-code: `on_download_clicked()`
+#### Pseudo-code: `_start()`
 Triggered when the user clicks the main **Download** button. It determines whether to fetch video list details or begin downloading files.
 
 ```python
-def on_download_clicked(self):
+def _start(self):
     # 1. Stop if a background task is already executing
     if self.is_busy():
         self.log_to_box("Warning: Task already running. Click Stop first.")
@@ -89,7 +119,7 @@ def on_download_clicked(self):
 ---
 
 ### Class: `TaskThread`
-Inherits from `QThread`. Runs operations on a background OS thread to keep the main GUI window responsive.
+Lives in [jobs.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/jobs.py), shared by the Downloader and Import tabs. Inherits from `QThread`. Runs operations on a background OS thread to keep the main GUI window responsive.
 
 #### Pseudo-code: `run()`
 Main loop of the worker thread. Runs either metadata fetching or file downloading.
@@ -140,7 +170,7 @@ def run(self):
 
 ---
 
-## 3. Metadata Extraction Module: `application/utils/video_info_extractor.py`
+## 4. Metadata Extraction Module: `application/utils/video_info_extractor.py`
 
 File Scheme Link: [video_info_extractor.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/utils/video_info_extractor.py)
 
@@ -206,7 +236,7 @@ def list_videos(source_kind, source_value, config, db_path, logger, token):
 
 ---
 
-## 4. Download Execution Module: `application/utils/download_manager.py`
+## 5. Download Execution Module: `application/utils/download_manager.py`
 
 File Scheme Link: [download_manager.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/utils/download_manager.py)
 
@@ -288,7 +318,7 @@ def download_one(target, media_type, config, db_path, logger, token, source_name
 
 ---
 
-## 5. Configuration Resolution: `application/utils/config_manager.py`
+## 6. Configuration Resolution: `application/utils/config_manager.py`
 
 File Scheme Link: [config_manager.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/utils/config_manager.py)
 

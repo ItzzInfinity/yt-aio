@@ -108,6 +108,7 @@ def run_streaming_command(
     logger: LogFn | None,
     env: dict[str, str] | None = None,
 ) -> tuple[int, list[str]]:
+    safe_log(logger, f"[{now_string()}] [TX] {os.path.basename(command[0])} -> {command[-1]}")
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -127,7 +128,7 @@ def run_streaming_command(
             if line:
                 cleaned = line.rstrip()
                 output_lines.append(cleaned)
-                safe_log(logger, cleaned)
+                safe_log(logger, f"[{now_string()}] [RX] {cleaned}")
                 continue
             if process.poll() is not None:
                 break
@@ -162,9 +163,9 @@ def download_one(
         title = target.title or target.url
         safe_log(
             logger,
-            f"[{now_string()}] Could not resolve title for {target.url}: {exc}. Using fallback title.",
+            f"[{now_string()}] [WARN] Could not resolve title for {target.url}: {exc}. Using fallback title.",
         )
-    safe_log(logger, f"[{now_string()}] Starting {media_type} download: {title}")
+    safe_log(logger, f"[{now_string()}] [INFO] Starting {media_type} download: {title}")
     command = build_download_command(target.url, media_type, config, use_auth=False)
     return_code, output_lines = run_streaming_command(
         command,
@@ -177,7 +178,7 @@ def download_one(
     if return_code != 0 and _should_retry_with_auth(combined_output, config, attempted_auth=False):
         safe_log(
             logger,
-            f"[{now_string()}] Raw download hit YouTube bot checks. Retrying with browser cookies.",
+            f"[{now_string()}] [WARN] Raw download hit YouTube bot checks. Retrying with browser cookies.",
         )
         command = build_download_command(target.url, media_type, config, use_auth=True)
         return_code, output_lines = run_streaming_command(
@@ -241,7 +242,7 @@ def download_one(
                 "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
             },
         )
-        safe_log(logger, f"[{now_string()}] Download failed: {title}")
+        safe_log(logger, f"[{now_string()}] [ERR] Download failed: {title}")
         return False
 
     log_download(
@@ -261,7 +262,7 @@ def download_one(
             "source_id": target.source_id,
         },
     )
-    safe_log(logger, f"[{now_string()}] Download complete: {title}")
+    safe_log(logger, f"[{now_string()}] [INFO] Download complete: {title}")
     return True
 
 
@@ -281,7 +282,7 @@ def download_many(
     worker_count = min(max(1, int(config.get("max_concurrent_downloads", 2))), max(1, len(targets)))
     safe_log(
         logger,
-        f"[{now_string()}] Download queue started with {len(targets)} items and {worker_count} workers.",
+        f"[{now_string()}] [INFO] Download queue started with {len(targets)} items and {worker_count} workers.",
     )
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -292,7 +293,7 @@ def download_many(
         for future in as_completed(future_map):
             target = future_map[future]
             if token.is_cancelled():
-                safe_log(logger, f"[{now_string()}] Stop requested. Remaining downloads will be cancelled.")
+                safe_log(logger, f"[{now_string()}] [WARN] Stop requested. Remaining downloads will be cancelled.")
                 break
             try:
                 if future.result():
@@ -314,10 +315,10 @@ def download_many(
                         "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
                     },
                 )
-                safe_log(logger, f"[{now_string()}] Unexpected download error for {target.url}: {exc}")
+                safe_log(logger, f"[{now_string()}] [ERR] Unexpected download error for {target.url}: {exc}")
 
     summary = f"Completed downloads. Success: {success_count}, Failed/Cancelled: {failure_count}"
-    safe_log(logger, f"[{now_string()}] {summary}")
+    safe_log(logger, f"[{now_string()}] [INFO] {summary}")
     return summary
 
 

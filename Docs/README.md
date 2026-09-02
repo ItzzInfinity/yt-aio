@@ -14,6 +14,7 @@ graph LR
     Arch --> Code[02_Code & Modules]
     Code --> DB[03_Database & Config]
     DB --> Contrib[04_Contributing]
+    Contrib --> Tabs[05_Tab_Shell_Migration]
 ```
 
 ### **Recommended Reading Sequence**
@@ -22,6 +23,7 @@ graph LR
 3. **[02_CODE_AND_MODULES.md](file:///home/itzzinfinity/GitHub/yt_aio/Docs/02_CODE_AND_MODULES.md)** (20 min) — Module guide, entry functions cheatsheet, and implementation pseudo-code.
 4. **[03_DATABASE_AND_CONFIG.md](file:///home/itzzinfinity/GitHub/yt_aio/Docs/03_DATABASE_AND_CONFIG.md)** (15 min) — Relational schema structures, metadata caching, and configuration handling.
 5. **[04_CONTRIBUTING_AND_ERRORS.md](file:///home/itzzinfinity/GitHub/yt_aio/Docs/04_CONTRIBUTING_AND_ERRORS.md)** (10 min) — Error capture workflows, test cases, and coding style guidelines.
+6. **[05_TAB_SHELL_MIGRATION.md](file:///home/itzzinfinity/GitHub/yt_aio/Docs/05_TAB_SHELL_MIGRATION.md)** (20 min) — FSD 1.7.2: the plan for moving the app into a tab shell so each new feature is its own tab.
 
 ---
 
@@ -31,8 +33,15 @@ When you need to modify or debug a specific feature, use this quick reference ta
 
 | If you want to change... | Key Entry Function | File Scheme Link |
 |---|---|---|
-| **App Startup & UI Layout** | `MainWindow.__init__()` | [main_window.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/ui/main_window.py) |
-| **QThread Worker Tasks** | `TaskThread.run()` | [main_window.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/ui/main_window.py) |
+| **App Startup & Tab Bar** | `AppShell.__init__()`, `main()` | [shell.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/shell.py) |
+| **Downloader Tab Layout & Slots** | `DownloaderPanel.__init__()` | [panel.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/features/downloader/panel.py) |
+| **QThread Worker Tasks** | `TaskThread.run()` | [jobs.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/jobs.py) |
+| **Config Reload & DB Path** | `AppContext.reload_if_changed()` | [context.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/context.py) |
+| **PyQt6 / PyQt5 Compatibility** | `QT_API`, `exec_app()` | [qt.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/ui/qt.py) |
+| **Reading Logs & History** | `fetch_view()`, `LOG_VIEWS` | [queries.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/db/queries.py) |
+| **Library Filters & Deletion** | `fetch_videos()`, `delete_videos()` | [queries.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/db/queries.py) |
+| **Backup File Parsing** | `parse_backup_file()` | [parsers.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/features/importer/parsers.py) |
+| **Editing Settings From The UI** | `SettingsPanel._save()` | [settings/panel.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/features/settings/panel.py) |
 | **Styling, Hover Effects, QSS** | Styles definitions | [styles.qss](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/ui/styles.qss) |
 | **Channel/Playlist Listing** | `list_videos()` | [video_info_extractor.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/utils/video_info_extractor.py) |
 | **Single Video Metadata Fetching** | `fetch_video_metadata()` | [video_info_extractor.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/utils/video_info_extractor.py) |
@@ -149,8 +158,15 @@ YT-AIO utilizes a decoupled **three-layer architecture** with strict separation 
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ UI PRESENTATION LAYER                                  │
-│ - MainWindow: Listens to UI buttons, redraws grid      │
+│ SHELL LAYER                                            │
+│ - AppShell: Import, Downloader, Library, Logs, Settings│
+│ - AppContext: shared config and database path          │
+└──────────────────────────┬─────────────────────────────┘
+                           │ constructs one panel per tab
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│ UI PRESENTATION LAYER (one panel per feature tab)      │
+│ - DownloaderPanel: listens to UI buttons, redraws grid │
 │ - TaskThread: Spawns a background thread per task      │
 └──────────────────────────┬─────────────────────────────┘
                            │ QThread signals
