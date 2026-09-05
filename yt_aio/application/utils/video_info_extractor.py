@@ -7,11 +7,13 @@ import shutil
 import site
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from ... import APP_VERSION
@@ -22,6 +24,7 @@ from ..db.database_manager import (
     log_video_info_batch,
     upsert_source,
 )
+from .browser_cookies import cookie_home_for
 from .config_manager import resolve_runtime_path
 from .shared import CancellationToken, LogFn, VideoItem, now_string, safe_log
 
@@ -66,30 +69,22 @@ def _cookie_browser_spec(config: dict[str, Any]) -> str | None:
 
 
 def _cookie_home_override(config: dict[str, Any], use_auth: bool) -> str | None:
+    """The HOME yt-dlp needs so it can find the browser profile, or None.
+
+    An explicit cookie_fallback_home always wins. Otherwise the browser is looked up in
+    utils/browser_cookies.py, which knows the snap and flatpak layouts yt-dlp does not.
+    A package install needs no override and returns None.
+    """
     if not use_auth:
         return None
 
-    if config.get("cookie_fallback_home"):
-        return str(Path(resolve_runtime_path(str(config["cookie_fallback_home"])) or str(config["cookie_fallback_home"])).expanduser())
+    configured = config.get("cookie_fallback_home")
+    if configured:
+        resolved = resolve_runtime_path(str(configured)) or str(configured)
+        return str(Path(resolved).expanduser())
 
-    browser = str(config.get("cookie_fallback_browser") or "").lower()
-    if browser != "brave":
-        return None
-
-    snap_current = Path.home() / "snap" / "brave" / "current"
-    if snap_current.exists():
-        return str(snap_current)
-
-    snap_root = Path.home() / "snap" / "brave"
-    numeric_dirs = sorted(
-        [path for path in snap_root.iterdir() if path.is_dir() and path.name.isdigit()],
-        key=lambda path: int(path.name),
-        reverse=True,
-    ) if snap_root.exists() else []
-    if numeric_dirs:
-        return str(numeric_dirs[0])
-
-    return None
+    browser = str(config.get("cookie_fallback_browser") or "")
+    return cookie_home_for(browser) if browser else None
 
 
 def build_yt_dlp_env(config: dict[str, Any], *, use_auth: bool = False) -> dict[str, str]:
@@ -119,8 +114,7 @@ def build_yt_dlp_base_args(config: dict[str, Any], *, use_auth: bool = False) ->
     if config.get("youtube_remote_components"):
         args.extend(["--remote-components", str(config["youtube_remote_components"])])
 
-    if config.get("youtube_visitor_data"):
-        args.extend(["--extractor-args", f"youtube:visitor_data={config['youtube_visitor_data']}"])
+    # args.extend(build_youtube_extractor_args(config))
 
     if use_auth:
         if config.get("cookie_file"):
@@ -144,6 +138,37 @@ def build_yt_dlp_command(
     if not (YT_DLP_SPEC and shutil.which(sys.executable)):
         launcher = ["yt-dlp"]
     return [*launcher, *build_yt_dlp_base_args(config, use_auth=use_auth), *command_parts]
+
+
+def build_listing_args(config: dict[str, Any]) -> list[str]:
+    """The flat-playlist listing options, from Docs/06_YTDLNIS_APPROACH.md section 3.5.
+
+    --lazy-playlist streams entries as the extractor finds them instead of collecting the
+    whole playlist first, which is what made a large channel time out (FSD 1.8.1). -R 1 and
+    a socket timeout make a bad entry fail in seconds rather than stall the run.
+
+    --no-warnings is deliberately not passed, although the source document lists it. Two of
+    the bot-challenge markers we watch for arrive as warnings, so silencing warnings would
+    silence the cookie retry with them.
+    """
+    timeout = config.get("socket_timeout", 15)
+    try:
+        timeout = max(1, int(timeout))
+    except (TypeError, ValueError):
+        timeout = 15
+
+    return [
+        "--flat-playlist",
+        "--lazy-playlist",
+        "-j",
+        "--ignore-errors",
+        "-R",
+        "1",
+        "--socket-timeout",
+        str(timeout),
+        "--extractor-args",
+        "youtubetab:approximate_date",
+    ]
 
 
 def resolve_source_url(source_kind: str, raw_value: str) -> str:
@@ -194,7 +219,9 @@ def parse_quick_download_urls(raw_text: str) -> tuple[list[str], list[str]]:
 
 
 def format_duration(seconds: int | None) -> str:
-    if seconds is None:
+    # A negative value is a sentinel for "not known", which several backup formats use.
+    # Formatting one produces nonsense like -1:59:59, so it is reported as unknown.
+    if seconds is None or int(seconds) < 0:
         return "Unknown"
 
     minutes, second = divmod(int(seconds), 60)
@@ -381,22 +408,281 @@ def _log_video_metadata(
     )
 
 
-def fetch_video_metadata(
-    video_id: str,
-    config: dict[str, Any],
-    token: CancellationToken,
-) -> dict[str, Any] | None:
-    if token.is_cancelled():
+# Every field the viewers and the cache need, asked for in one --print template. Cheaper
+# than -J, which serialises far more than this, but `formats` stays because the bitrate
+# column is read off it and yt-dlp has no shorthand for a slice of a list of objects.
+BATCH_METADATA_FIELDS = (
+    "id",
+    "title",
+    "channel",
+    "uploader",
+    "playlist_channel",
+    "playlist_uploader",
+    "duration",
+    "upload_date",
+    "thumbnail",
+    "webpage_url",
+    "view_count",
+    "formats",
+)
+BATCH_METADATA_TEMPLATE = "%(.{" + ",".join(BATCH_METADATA_FIELDS) + "})j"
+
+
+def _info_cache_dir(config: dict[str, Any]) -> Path | None:
+    """The directory holding one JSON file per video, or None when caching is off."""
+    if not config.get("info_cache_enabled", True):
+        return None
+    raw = str(config.get("info_cache_dir") or "./db/info_cache")
+    resolved = resolve_runtime_path(raw) or raw
+    directory = Path(resolved).expanduser()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return directory
+
+
+def _info_cache_max_age(config: dict[str, Any]) -> float:
+    try:
+        hours = max(0, int(config.get("info_cache_max_age_hours", 168)))
+    except (TypeError, ValueError):
+        hours = 168
+    return hours * 3600.0
+
+
+def read_cached_info(video_id: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    """The stored metadata for one video, if it is present and young enough.
+
+    Docs/06_YTDLNIS_APPROACH.md section 3.6 reaches for --load-info-json. Storing our own
+    field subset and reading it directly is the same idea taken one step further: a second
+    pass runs no yt-dlp process at all, rather than a cheaper one. Their CRC32 file names
+    solve an Android path problem; a video id is already a safe file name here.
+    """
+    directory = _info_cache_dir(config)
+    if directory is None:
         return None
 
-    return run_json_command(
-        ["-J", f"https://www.youtube.com/watch?v={video_id}"],
-        config=config,
-        retries=int(config.get("max_retries", 3)),
-        retry_delay=int(config.get("retry_delay", 5)),
-        timeout=45,
-        token=token,
-    )
+    path = directory / f"{video_id}.json"
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+
+    max_age = _info_cache_max_age(config)
+    if max_age and age > max_age:
+        return None
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) and data.get("id") else None
+
+
+def write_cached_info(data: dict[str, Any], config: dict[str, Any]) -> None:
+    """Store one video's metadata. A failure here is never worth failing a fetch for."""
+    directory = _info_cache_dir(config)
+    video_id = data.get("id")
+    if directory is None or not video_id:
+        return
+    target = directory / f"{video_id}.json"
+    temporary = target.with_suffix(".json.tmp")
+    try:
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(temporary, target)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _metadata_batch_size(config: dict[str, Any]) -> int:
+    """How many URLs one yt-dlp process is given."""
+    try:
+        return max(1, int(config.get("metadata_batch_size", 25)))
+    except (TypeError, ValueError):
+        return 25
+
+
+def _metadata_process_count(config: dict[str, Any]) -> int:
+    """How many of those processes run at once."""
+    try:
+        return max(1, int(config.get("max_metadata_workers", 4)))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _run_metadata_chunk(
+    video_ids: list[str],
+    config: dict[str, Any],
+    token: CancellationToken,
+    logger: LogFn | None,
+    *,
+    use_auth: bool,
+) -> tuple[dict[str, dict[str, Any]], str]:
+    """One yt-dlp process for a whole chunk. Returns what it produced and its stderr."""
+    timeout = config.get("socket_timeout", 15)
+    try:
+        timeout = max(1, int(timeout))
+    except (TypeError, ValueError):
+        timeout = 15
+
+    handle, url_file = tempfile.mkstemp(prefix="yt_aio_urls_", suffix=".txt", text=True)
+    collected: dict[str, dict[str, Any]] = {}
+    stderr_text = ""
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            for video_id in video_ids:
+                stream.write(f"https://www.youtube.com/watch?v={video_id}\n")
+
+        command = build_yt_dlp_command(
+            config,
+            [
+                "-a",
+                url_file,
+                "--skip-download",
+                "--ignore-errors",
+                "-R",
+                "1",
+                "--socket-timeout",
+                str(timeout),
+                "--print",
+                BATCH_METADATA_TEMPLATE,
+            ],
+            use_auth=use_auth,
+        )
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=build_yt_dlp_env(config, use_auth=use_auth),
+        )
+        token.register(process)
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                if token.is_cancelled():
+                    process.terminate()
+                    break
+                cleaned = line.strip()
+                if not cleaned or not cleaned.startswith("{"):
+                    continue
+                try:
+                    data = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    continue
+                video_id = data.get("id")
+                if video_id:
+                    collected[video_id] = data
+
+            if process.stderr is not None:
+                stderr_text = process.stderr.read() or ""
+            process.wait()
+        finally:
+            token.unregister(process)
+    finally:
+        try:
+            os.unlink(url_file)
+        except OSError:
+            pass
+
+    return collected, stderr_text
+
+
+def fetch_metadata_batch(
+    video_ids: list[str],
+    config: dict[str, Any],
+    token: CancellationToken,
+    logger: LogFn | None = None,
+    *,
+    on_video: Callable[[str, dict[str, Any]], None] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Full metadata for many videos (06_YTDLNIS_APPROACH.md 3.1), batched and parallel.
+
+    The source document batches and then runs the batches in sequence. Measured here, that
+    is slower than the thread pool it replaces: one process spends about a second starting
+    up and then fetches its URLs one after another, so a sequential run gives up all the
+    network overlap to save a startup. Batching and keeping the pool wins twice, so
+    `metadata_batch_size` URLs go to one process and `max_metadata_workers` processes run
+    together. `max_metadata_workers` therefore keeps the meaning it already had.
+
+    `on_video` is called once per result, from a lock, so a caller may touch the database
+    and its own lists inside it without adding one of its own.
+    """
+    wanted = [video_id for video_id in video_ids if video_id]
+    if not wanted:
+        return {}
+
+    results: dict[str, dict[str, Any]] = {}
+    pending: list[str] = []
+    for video_id in wanted:
+        cached = read_cached_info(video_id, config)
+        if cached is None:
+            pending.append(video_id)
+            continue
+        results[video_id] = cached
+        if on_video is not None:
+            on_video(video_id, cached)
+
+    if results:
+        safe_log(logger, f"[{now_string()}] [INFO] {len(results)} of {len(wanted)} served from the info cache.")
+    if not pending:
+        return results
+
+    batch_size = _metadata_batch_size(config)
+    chunks = [pending[start : start + batch_size] for start in range(0, len(pending), batch_size)]
+    process_count = min(_metadata_process_count(config), len(chunks))
+
+    guard = threading.Lock()
+
+    def handle(chunk: list[str]) -> None:
+        if token.is_cancelled():
+            return
+        collected, stderr_text = _run_metadata_chunk(chunk, config, token, logger, use_auth=False)
+
+        # A chunk that produced nothing may have hit a bot check rather than bad URLs.
+        # Retry that chunk once with cookies; a chunk that produced anything is kept.
+        if not collected and not token.is_cancelled() and _should_retry_with_auth(stderr_text, config, False):
+            safe_log(
+                logger,
+                f"[{now_string()}] [WARN] Metadata batch hit YouTube bot checks. Retrying with browser cookies.",
+            )
+            collected, stderr_text = _run_metadata_chunk(chunk, config, token, logger, use_auth=True)
+
+        for data in collected.values():
+            write_cached_info(data, config)
+
+        with guard:
+            for video_id, data in collected.items():
+                results[video_id] = data
+                if on_video is not None:
+                    on_video(video_id, data)
+
+            missing = [video_id for video_id in chunk if video_id not in collected]
+            if missing and not token.is_cancelled():
+                safe_log(
+                    logger,
+                    f"[{now_string()}] [WARN] No metadata for {len(missing)} of {len(chunk)} in this batch: "
+                    + ", ".join(missing[:5])
+                    + ("..." if len(missing) > 5 else ""),
+                )
+
+    if process_count == 1:
+        for chunk in chunks:
+            handle(chunk)
+        return results
+
+    with ThreadPoolExecutor(max_workers=process_count) as executor:
+        for future in as_completed([executor.submit(handle, chunk) for chunk in chunks]):
+            try:
+                future.result()
+            except Exception as exc:
+                safe_log(logger, f"[{now_string()}] [WARN] A metadata batch failed: {exc}")
+
+    return results
 
 
 def _log_flat_video_metadata(
@@ -494,15 +780,14 @@ def _stream_flat_playlist(
             for err_line in process.stderr:
                 stderr_lines.append(err_line.strip())
 
-        return_code = process.wait()
+        process.wait()
         combined_err = "\n".join(stderr_lines)
-        if return_code != 0 and len(raw_entries) == 0:
+        if not raw_entries:
+            # --ignore-errors lets yt-dlp exit zero having extracted nothing, so the
+            # decision to retry with cookies reads the stderr text, not the exit code.
             if _should_retry_with_auth(combined_err, config, attempted_auth=False):
                 hit_bot_checks = True
             return [], source_value.strip(), hit_bot_checks, combined_err
-
-        if not raw_entries:
-            return [], source_value.strip(), False, combined_err
 
         source_name = source_value.strip()
         for entry in raw_entries:
@@ -598,7 +883,7 @@ def list_videos(
     source_key = f"{source_kind}:{source_value.strip()}"
 
     attempted_auth = False
-    cmd_parts = ["--flat-playlist", "-j", "--extractor-args", "youtubetab:approximate_date", source_url]
+    cmd_parts = [*build_listing_args(config), source_url]
 
     cmd = build_yt_dlp_command(config, cmd_parts, use_auth=attempted_auth)
     env = build_yt_dlp_env(config, use_auth=attempted_auth)
@@ -632,43 +917,51 @@ def list_videos(
 
         if pending_items:
             safe_log(logger, f"[{now_string()}] [INFO] Fetching full metadata for {len(pending_items)} uncached videos...")
-            worker_count = min(max(1, int(config.get("max_metadata_workers", 4))), max(1, len(pending_items)))
             video_to_index = {item.video_id: i for i, item in enumerate(results)}
+            done = 0
 
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                future_map = {
-                    executor.submit(fetch_video_metadata, item.video_id, config, token): item
-                    for item in pending_items
-                }
-                for completed_count, future in enumerate(as_completed(future_map), start=1):
-                    if token.is_cancelled():
-                        break
-                    old_item = future_map[future]
-                    video_id = old_item.video_id
-                    try:
-                        data = future.result()
-                        if data:
-                            new_item = _metadata_to_item(data, source_name)
-                            new_item.source_id = old_item.source_id
-                            new_item.video_info_id = _log_video_metadata(db_path, data, source_kind, source_name, old_item.source_id)
-                            idx = video_to_index[video_id]
-                            results[idx] = new_item
-                            safe_log(logger, f"[{now_string()}] [INFO] Full metadata {completed_count}/{len(pending_items)}: {new_item.title}")
-                    except Exception as exc:
-                        safe_log(logger, f"[{now_string()}] [WARN] Failed full metadata for {video_id}: {exc}")
-                        log_error(
-                            db_path,
-                            {
-                                "error_message": str(exc),
-                                "timestamp": now_string(),
-                                "stack_trace": traceback.format_exc(),
-                                "url": f"https://www.youtube.com/watch?v={video_id}",
-                                "action": "fetch_full_metadata",
-                                "user_input": source_value,
-                                "script_version": APP_VERSION,
-                                "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
-                            },
-                        )
+            def absorb(video_id: str, data: dict[str, Any]) -> None:
+                """Fold one batch result back into the list the caller is waiting on."""
+                nonlocal done
+                index = video_to_index.get(video_id)
+                if index is None:
+                    return
+                old_item = results[index]
+                try:
+                    new_item = _metadata_to_item(data, source_name)
+                    new_item.source_id = old_item.source_id
+                    new_item.video_info_id = _log_video_metadata(
+                        db_path, data, source_kind, source_name, old_item.source_id
+                    )
+                    results[index] = new_item
+                    done += 1
+                    safe_log(
+                        logger,
+                        f"[{now_string()}] [INFO] Full metadata {done}/{len(pending_items)}: {new_item.title}",
+                    )
+                except Exception as exc:
+                    safe_log(logger, f"[{now_string()}] [WARN] Failed full metadata for {video_id}: {exc}")
+                    log_error(
+                        db_path,
+                        {
+                            "error_message": str(exc),
+                            "timestamp": now_string(),
+                            "stack_trace": traceback.format_exc(),
+                            "url": f"https://www.youtube.com/watch?v={video_id}",
+                            "action": "fetch_full_metadata",
+                            "user_input": source_value,
+                            "script_version": APP_VERSION,
+                            "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
+                        },
+                    )
+
+            fetch_metadata_batch(
+                [item.video_id for item in pending_items],
+                config,
+                token,
+                logger,
+                on_video=absorb,
+            )
 
     safe_log(logger, f"[{now_string()}] [INFO] Listing complete: {len(results)} videos ready.")
     return results, source_name

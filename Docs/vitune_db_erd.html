@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ViTune_backup_20250831122626.db — ViTune Relationship Map</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0a0c10; --surface: #12161e; --surface2: #1a202e; --border: #252d3e;
+    --primary: #00e5ff; --primary-dim: rgba(0,229,255,0.12);
+    --accent: #ff6b6b; --accent2: #ffd93d; --accent3: #6bcb77; --accent4: #c77dff;
+    --text: #e0e8f0; --muted: #5a6a82; --junction: #ff9a3c;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'JetBrains Mono', ui-monospace, monospace; min-height: 100vh; }
+  header.page { padding: 28px 40px 20px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0d1119 0%, transparent 100%);
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  header.page h1 { font-family: 'Syne', system-ui, sans-serif; font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; color: #fff; }
+  header.page h1 span { color: var(--primary); }
+  .sub { color: var(--muted); font-size: 0.78rem; margin-top: 6px; }
+  .header-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.7rem; padding: 4px 10px;
+    border-radius: 20px; border: 1px solid; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .badge-blue { border-color: var(--primary); color: var(--primary); background: var(--primary-dim); }
+  .badge-orange { border-color: var(--junction); color: var(--junction); background: rgba(255,154,60,0.1); }
+  .badge-green { border-color: var(--accent3); color: var(--accent3); background: rgba(107,203,119,0.1); }
+  main { padding: 28px 40px 64px; max-width: 1400px; margin: 0 auto; }
+  section { margin-bottom: 46px; }
+  h2 { font-family: 'Syne', system-ui, sans-serif; font-size: 1.15rem; font-weight: 700; color: #fff;
+    margin-bottom: 6px; letter-spacing: -0.01em; }
+  h2::before { content: '// '; color: var(--primary); }
+  .lede { color: var(--muted); font-size: 0.82rem; line-height: 1.7; margin-bottom: 18px; max-width: 80ch; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; font-size: 0.72rem; color: var(--muted); }
+  .legend-item { display: flex; align-items: center; gap: 7px; }
+  .dot { width: 11px; height: 11px; border-radius: 3px; border: 1.6px solid; }
+  .diagram-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px; overflow-x: auto; }
+  .ref-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 14px; }
+  .ref-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .ref-card.hub { border-color: var(--accent3); }
+  .ref-card.entity { border-color: rgba(0,229,255,0.45); }
+  .ref-card.junction { border-color: rgba(255,154,60,0.45); }
+  .ref-card.detail { border-color: rgba(199,125,255,0.45); }
+  .ref-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 11px 14px; background: var(--surface2); border-bottom: 1px solid var(--border); }
+  .ref-title { font-weight: 700; color: #fff; font-size: 0.9rem; }
+  .count { font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
+  .purpose { padding: 11px 14px; font-size: 0.73rem; line-height: 1.65; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .ref-rows { padding: 6px 0; }
+  .row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
+    padding: 5px 14px; font-size: 0.73rem; }
+  .row:hover { background: rgba(255,255,255,0.03); }
+  .cname { color: var(--text); overflow-wrap: anywhere; }
+  .ctype { color: var(--muted); font-size: 0.68rem; }
+  .col-pk .cname { color: var(--accent2); font-weight: 700; }
+  .col-fk .cname { color: var(--junction); }
+  .key-icon { display: inline-block; font-size: 0.58rem; padding: 1px 5px; border-radius: 4px; margin-left: 5px;
+    background: rgba(255,217,61,0.14); color: var(--accent2); border: 1px solid rgba(255,217,61,0.35); white-space: nowrap; }
+  .key-icon.fk { background: rgba(255,154,60,0.12); color: var(--junction); border-color: rgba(255,154,60,0.35); }
+  .rels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .rel-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 15px 17px; }
+  .rel-title { font-weight: 700; color: #fff; font-size: 0.9rem; margin-bottom: 4px; }
+  .rel-type { display: inline-block; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--junction); border: 1px solid rgba(255,154,60,0.35); background: rgba(255,154,60,0.1);
+    padding: 2px 8px; border-radius: 20px; margin-bottom: 10px; }
+  .rel-path { font-size: 0.69rem; color: var(--primary); background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 10px; margin-bottom: 10px; overflow-wrap: anywhere; }
+  .rel-desc { font-size: 0.74rem; line-height: 1.7; color: var(--muted); }
+  table.facts { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+  table.facts th, table.facts td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  table.facts th { color: var(--primary); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  table.facts td.num { text-align: right; color: var(--accent2); }
+  footer { padding: 22px 40px 40px; color: var(--muted); font-size: 0.7rem; border-top: 1px solid var(--border); }
+  @media (max-width: 700px) { header.page, main, footer { padding-left: 18px; padding-right: 18px; } }
+</style>
+</head>
+<body>
+<header class="page">
+  <div>
+    <h1>ViTune <span>&#183; relationship map</span></h1>
+    <div class="sub">ViTune_backup_20250831122626.db &#183; 15 tables &#183; 1 view &#183; 43,792 rows &#183; generated 2026-09-05</div>
+  </div>
+  <div class="header-badges">
+    <span class="badge badge-green">Song is the hub</span>
+    <span class="badge badge-orange">3 junctions</span>
+    <span class="badge badge-blue">Android Room</span>
+  </div>
+</header>
+<main>
+
+<section>
+  <h2>The shape of it</h2>
+  <p class="lede">
+    ViTune is an Android Room database, so every table is a Kotlin entity and every
+    relationship is a declared foreign key. <strong>Song</strong> is the hub and its
+    primary key is the YouTube video id, which is why a ViTune backup can be merged with
+    anything else keyed the same way. Three junction tables carry the many-to-many
+    relationships to artists, albums and playlists; three more tables hang one-to-one or
+    one-to-many detail off a song. Everything else is app state rather than music.
+  </p>
+  <div class="legend"><div class="legend-item"><span class="dot" style="border-color:var(--accent3)"></span>Hub table</div><div class="legend-item"><span class="dot" style="border-color:var(--primary)"></span>Entity</div><div class="legend-item"><span class="dot" style="border-color:var(--junction)"></span>Junction</div><div class="legend-item"><span class="dot" style="border-color:var(--accent4)"></span>Song detail</div><div class="legend-item"><span class="dot" style="border-color:var(--muted)"></span>Not on the diagram</div></div>
+  <div class="diagram-wrap"><svg viewBox="0 0 1020 382" width="100%" role="img" aria-label="ViTune entity relationship diagram">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/></marker></defs>
+<path d="M 790 309 C 760 309, 760 191, 730 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 790 73 C 760 73, 760 191, 730 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 790 191 C 760 191, 760 191, 730 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 290 191 C 260 191, 260 191, 230 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 480 191 C 510 191, 510 191, 540 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 290 73 C 260 73, 260 73, 230 73" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 480 73 C 510 73, 510 191, 540 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 290 309 C 260 309, 260 309, 230 309" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 480 309 C 510 309, 510 191, 540 191" fill="none" stroke="var(--border)" stroke-width="1.6" marker-end="url(#head)"/>
+<g><rect x="40" y="40" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--primary)" stroke-width="1.6"/><text x="54" y="66" fill="var(--primary)" font-size="14" font-weight="700">Artist</text><text x="54" y="87" fill="var(--muted)" font-size="11">2,000 rows &#183; 5 cols</text></g>
+<g><rect x="40" y="158" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--primary)" stroke-width="1.6"/><text x="54" y="184" fill="var(--primary)" font-size="14" font-weight="700">Album</text><text x="54" y="205" fill="var(--muted)" font-size="11">2,712 rows &#183; 10 cols</text></g>
+<g><rect x="40" y="276" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--primary)" stroke-width="1.6"/><text x="54" y="302" fill="var(--primary)" font-size="14" font-weight="700">Playlist</text><text x="54" y="323" fill="var(--muted)" font-size="11">4 rows &#183; 4 cols</text></g>
+<g><rect x="290" y="40" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--junction)" stroke-width="1.6"/><text x="304" y="66" fill="var(--junction)" font-size="14" font-weight="700">SongArtistMap</text><text x="304" y="87" fill="var(--muted)" font-size="11">6,094 rows &#183; 2 cols</text></g>
+<g><rect x="290" y="158" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--junction)" stroke-width="1.6"/><text x="304" y="184" fill="var(--junction)" font-size="14" font-weight="700">SongAlbumMap</text><text x="304" y="205" fill="var(--muted)" font-size="11">3,978 rows &#183; 3 cols</text></g>
+<g><rect x="290" y="276" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--junction)" stroke-width="1.6"/><text x="304" y="302" fill="var(--junction)" font-size="14" font-weight="700">SongPlaylistMap</text><text x="304" y="323" fill="var(--muted)" font-size="11">330 rows &#183; 3 cols</text></g>
+<g><rect x="540" y="158" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--accent3)" stroke-width="1.6"/><text x="554" y="184" fill="var(--accent3)" font-size="14" font-weight="700">Song</text><text x="554" y="205" fill="var(--muted)" font-size="11">5,085 rows &#183; 10 cols</text></g>
+<g><rect x="790" y="40" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--accent4)" stroke-width="1.6"/><text x="804" y="66" fill="var(--accent4)" font-size="14" font-weight="700">Format</text><text x="804" y="87" fill="var(--muted)" font-size="11">4,474 rows &#183; 7 cols</text></g>
+<g><rect x="790" y="158" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--accent4)" stroke-width="1.6"/><text x="804" y="184" fill="var(--accent4)" font-size="14" font-weight="700">Lyrics</text><text x="804" y="205" fill="var(--muted)" font-size="11">244 rows &#183; 4 cols</text></g>
+<g><rect x="790" y="276" width="190" height="66" rx="10" fill="var(--surface2)" stroke="var(--accent4)" stroke-width="1.6"/><text x="804" y="302" fill="var(--accent4)" font-size="14" font-weight="700">Event</text><text x="804" y="323" fill="var(--muted)" font-size="11">18,394 rows &#183; 4 cols</text></g>
+</svg></div>
+</section>
+
+<section>
+  <h2>Relationships</h2>
+  <p class="lede">
+    Every one of these is a real foreign key in the file, not an inferred one. The path is
+    what a query has to walk to answer the question in the title.
+  </p>
+  <div class="rels-grid"><article class="rel-card"><div class="rel-title">Song &#8596; Artist</div><div class="rel-type">many-to-many</div><div class="rel-path">Song.id &#8594; SongArtistMap.songId &#8592;&#8594; SongArtistMap.artistId &#8594; Artist.id</div><p class="rel-desc">An artist name is not stored on the song. Reaching it always costs a join, and a song with three credits has three rows here. SongArtistMap has no position column, so the order the app credits artists in is not recorded.</p></article>
+<article class="rel-card"><div class="rel-title">Song &#8596; Album</div><div class="rel-type">many-to-many, one in practice</div><div class="rel-path">Song.id &#8594; SongAlbumMap.songId &#8592;&#8594; SongAlbumMap.albumId &#8594; Album.id</div><p class="rel-desc">position holds the track number. The junction allows several albums per song, which is what makes compilations expressible.</p></article>
+<article class="rel-card"><div class="rel-title">Song &#8596; Playlist</div><div class="rel-type">many-to-many</div><div class="rel-path">Song.id &#8594; SongPlaylistMap.songId &#8592;&#8594; SongPlaylistMap.playlistId &#8594; Playlist.id</div><p class="rel-desc">position is the running order. The SortedSongPlaylistMap view is this table ordered by position, so the app can read a playlist in order without an ORDER BY.</p></article>
+<article class="rel-card"><div class="rel-title">Song &#8594; Format</div><div class="rel-type">one-to-one</div><div class="rel-path">Format.songId &#8594; Song.id, with songId as the primary key</div><p class="rel-desc">One cached stream per song: itag, mime type, bitrate, content length and loudness. The primary key on songId is what makes it one-to-one rather than one-to-many.</p></article>
+<article class="rel-card"><div class="rel-title">Song &#8594; Lyrics</div><div class="rel-type">one-to-one</div><div class="rel-path">Lyrics.songId &#8594; Song.id, with songId as the primary key</div><p class="rel-desc">fixed is plain text, synced carries timings, startTime offsets them.</p></article>
+<article class="rel-card"><div class="rel-title">Song &#8594; Event</div><div class="rel-type">one-to-many</div><div class="rel-path">Event.songId &#8594; Song.id</div><p class="rel-desc">One row per play with a timestamp and playTime. Counting rows per songId gives a play count; Song.totalPlayTimeMs is the same information already summed.</p></article></div>
+</section>
+
+<section>
+  <h2>Tables that carry music</h2>
+  <p class="lede">
+    Primary keys in yellow, foreign keys in orange, with the table each one points at.
+  </p>
+  <div class="ref-grid"><article class="ref-card entity"><header class="ref-head"><span class="ref-title">Artist</span><span class="count">2,000 rows</span></header><p class="purpose">One row per credited artist, keyed by the YouTube channel or browse id.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">name</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">thumbnailUrl</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">timestamp</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">bookmarkedAt</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article>
+<article class="ref-card entity"><header class="ref-head"><span class="ref-title">Album</span><span class="count">2,712 rows</span></header><p class="purpose">One row per album, with the year, the cover and the credited authors as text.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">title</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">thumbnailUrl</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">year</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">authorsText</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">shareUrl</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">timestamp</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">bookmarkedAt</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">description</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">otherInfo</span><span class="ctype">TEXT</span><span class="cflags"></span></div></div></article>
+<article class="ref-card entity"><header class="ref-head"><span class="ref-title">Playlist</span><span class="count">4 rows</span></header><p class="purpose">A user-made playlist. browseId is set when it mirrors a YouTube playlist.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">name</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">browseId</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">thumbnail</span><span class="ctype">TEXT</span><span class="cflags"></span></div></div></article>
+<article class="ref-card junction"><header class="ref-head"><span class="ref-title">SongArtistMap</span><span class="count">6,094 rows</span></header><p class="purpose">Which artists are credited on which song. Many-to-many, no ordering column.</p><div class="ref-rows"><div class="row col-pk col-fk"><span class="cname">songId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Song</span></span></div><div class="row col-pk col-fk"><span class="cname">artistId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Artist</span></span></div></div></article>
+<article class="ref-card junction"><header class="ref-head"><span class="ref-title">SongAlbumMap</span><span class="count">3,978 rows</span></header><p class="purpose">Which album a song belongs to, with its track position.</p><div class="ref-rows"><div class="row col-pk col-fk"><span class="cname">songId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Song</span></span></div><div class="row col-pk col-fk"><span class="cname">albumId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Album</span></span></div><div class="row "><span class="cname">position</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article>
+<article class="ref-card junction"><header class="ref-head"><span class="ref-title">SongPlaylistMap</span><span class="count">330 rows</span></header><p class="purpose">Which playlist a song sits in, and where in the running order.</p><div class="ref-rows"><div class="row col-pk col-fk"><span class="cname">songId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Song</span></span></div><div class="row col-pk col-fk"><span class="cname">playlistId</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Playlist</span></span></div><div class="row "><span class="cname">position</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article>
+<article class="ref-card hub"><header class="ref-head"><span class="ref-title">Song</span><span class="count">5,085 rows</span></header><p class="purpose">One row per track. The hub: everything else hangs off its YouTube video id.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">title</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">artistsText</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">durationText</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">thumbnailUrl</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">likedAt</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">totalPlayTimeMs</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">loudnessBoost</span><span class="ctype">REAL</span><span class="cflags"></span></div><div class="row "><span class="cname">blacklisted</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">explicit</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article>
+<article class="ref-card detail"><header class="ref-head"><span class="ref-title">Format</span><span class="count">4,474 rows</span></header><p class="purpose">The cached stream chosen for a song: itag, bitrate, size and loudness.</p><div class="ref-rows"><div class="row col-pk col-fk"><span class="cname">songId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Song</span></span></div><div class="row "><span class="cname">itag</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">mimeType</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">bitrate</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">contentLength</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">lastModified</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">loudnessDb</span><span class="ctype">REAL</span><span class="cflags"></span></div></div></article>
+<article class="ref-card detail"><header class="ref-head"><span class="ref-title">Lyrics</span><span class="count">244 rows</span></header><p class="purpose">Fixed and time-synced lyrics for one song.</p><div class="ref-rows"><div class="row col-pk col-fk"><span class="cname">songId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon">PK</span><span class="key-icon fk">FK &#8594; Song</span></span></div><div class="row "><span class="cname">fixed</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">synced</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">startTime</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article>
+<article class="ref-card detail"><header class="ref-head"><span class="ref-title">Event</span><span class="count">18,394 rows</span></header><p class="purpose">One row per play, with a timestamp and how long it played for.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row col-fk"><span class="cname">songId</span><span class="ctype">TEXT</span><span class="cflags"><span class="key-icon fk">FK &#8594; Song</span></span></div><div class="row "><span class="cname">timestamp</span><span class="ctype">INTEGER</span><span class="cflags"></span></div><div class="row "><span class="cname">playTime</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article></div>
+</section>
+
+<section>
+  <h2>Tables that do not</h2>
+  <p class="lede">
+    App state, not library. An importer should read none of these: they describe what the
+    player was doing, not what the operator saved.
+  </p>
+  <div class="ref-grid"><article class="ref-card loose"><header class="ref-head"><span class="ref-title">SearchQuery</span><span class="count">474 rows</span></header><p class="purpose">Search box history.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">query</span><span class="ctype">TEXT</span><span class="cflags"></span></div></div></article>
+<article class="ref-card loose"><header class="ref-head"><span class="ref-title">QueuedMediaItem</span><span class="count">1 rows</span></header><p class="purpose">The playback queue, serialised as a blob.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">mediaItem</span><span class="ctype">BLOB</span><span class="cflags"></span></div><div class="row "><span class="cname">position</span><span class="ctype">INTEGER</span><span class="cflags"></span></div></div></article>
+<article class="ref-card loose"><header class="ref-head"><span class="ref-title">PipedSession</span><span class="count">0 rows</span></header><p class="purpose">Credentials for a Piped instance, when one is configured.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">apiBaseUrl</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">token</span><span class="ctype">TEXT</span><span class="cflags"></span></div><div class="row "><span class="cname">username</span><span class="ctype">TEXT</span><span class="cflags"></span></div></div></article>
+<article class="ref-card loose"><header class="ref-head"><span class="ref-title">room_master_table</span><span class="count">1 rows</span></header><p class="purpose">Android Room&#x27;s own schema-hash row. Not app data.</p><div class="ref-rows"><div class="row col-pk"><span class="cname">id</span><span class="ctype">INTEGER</span><span class="cflags"><span class="key-icon">PK</span></span></div><div class="row "><span class="cname">identity_hash</span><span class="ctype">TEXT</span><span class="cflags"></span></div></div></article>
+<article class="ref-card loose"><header class="ref-head"><span class="ref-title">android_metadata</span><span class="count">1 rows</span></header><p class="purpose">The Android locale row every Room database carries.</p><div class="ref-rows"><div class="row "><span class="cname">locale</span><span class="ctype">TEXT</span><span class="cflags"></span></div></div></article></div>
+</section>
+
+<section>
+  <h2>Every table by size</h2>
+  <table class="facts">
+    <thead><tr><th>Table</th><th style="text-align:right">Rows</th><th style="text-align:right">Columns</th><th>What it is for</th></tr></thead>
+    <tbody><tr><td>Event</td><td class="num">18,394</td><td class="num">4</td><td>One row per play, with a timestamp and how long it played for.</td></tr><tr><td>SongArtistMap</td><td class="num">6,094</td><td class="num">2</td><td>Which artists are credited on which song. Many-to-many, no ordering column.</td></tr><tr><td>Song</td><td class="num">5,085</td><td class="num">10</td><td>One row per track. The hub: everything else hangs off its YouTube video id.</td></tr><tr><td>Format</td><td class="num">4,474</td><td class="num">7</td><td>The cached stream chosen for a song: itag, bitrate, size and loudness.</td></tr><tr><td>SongAlbumMap</td><td class="num">3,978</td><td class="num">3</td><td>Which album a song belongs to, with its track position.</td></tr><tr><td>Album</td><td class="num">2,712</td><td class="num">10</td><td>One row per album, with the year, the cover and the credited authors as text.</td></tr><tr><td>Artist</td><td class="num">2,000</td><td class="num">5</td><td>One row per credited artist, keyed by the YouTube channel or browse id.</td></tr><tr><td>SearchQuery</td><td class="num">474</td><td class="num">2</td><td>Search box history.</td></tr><tr><td>SongPlaylistMap</td><td class="num">330</td><td class="num">3</td><td>Which playlist a song sits in, and where in the running order.</td></tr><tr><td>Lyrics</td><td class="num">244</td><td class="num">4</td><td>Fixed and time-synced lyrics for one song.</td></tr><tr><td>Playlist</td><td class="num">4</td><td class="num">4</td><td>A user-made playlist. browseId is set when it mirrors a YouTube playlist.</td></tr><tr><td>QueuedMediaItem</td><td class="num">1</td><td class="num">3</td><td>The playback queue, serialised as a blob.</td></tr><tr><td>android_metadata</td><td class="num">1</td><td class="num">1</td><td>The Android locale row every Room database carries.</td></tr><tr><td>room_master_table</td><td class="num">1</td><td class="num">2</td><td>Android Room&#x27;s own schema-hash row. Not app data.</td></tr><tr><td>PipedSession</td><td class="num">0</td><td class="num">4</td><td>Credentials for a Piped instance, when one is configured.</td></tr></tbody>
+  </table>
+</section>
+
+</main>
+<footer>
+  Generated by <code>Docs/generate_vitune_erd.py</code> from /home/itzzinfinity/Downloads/my_music/database/ViTune_backup_20250831122626.db.
+  Re-run it against a newer backup to refresh this page.
+  See <code>Docs/song_db_erd.html</code> for the OpenTune schema and
+  <code>Docs/opentune_vs_vitune.html</code> for the comparison.
+</footer>
+</body>
+</html>

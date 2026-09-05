@@ -87,6 +87,11 @@ def coerce_duration(value: Any) -> int | None:
         return None
     if isinstance(value, (int, float)):
         seconds = int(value)
+        # OpenTune writes -1 for a song whose length it never learned, and 8050 of the
+        # 9583 songs in a real backup carry it. That is an absence, not a duration, so it
+        # becomes None and the duration filter excludes the row rather than pretending.
+        if seconds < 0:
+            return None
         # NewPipe and several others store milliseconds. Nothing on YouTube runs for
         # more than a day, so a value that large is a millisecond count.
         return seconds // 1000 if seconds > 86_400 else seconds

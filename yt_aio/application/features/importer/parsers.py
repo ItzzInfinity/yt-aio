@@ -11,8 +11,8 @@ SQLite databases, ZIP archives containing any supported file, JSON, CSV and plai
 Anything else is scanned as text, which still finds links inside an unknown wrapper.
 
 A SQLite backup whose schema is recognised is read by that schema instead of scanned
-table by table; see opentune.py. The blind scan stays as the fallback for everything
-else, and it is the wrong tool whenever the layout is actually known.
+table by table; see opentune.py and vitune.py. The blind scan stays as the fallback for
+everything else, and it is the wrong tool whenever the layout is actually known.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from .models import (
     dedupe,
 )
 from .opentune import looks_like_opentune, parse_opentune
+from .vitune import looks_like_vitune, parse_vitune
 
 LogFn = Callable[[str], None]
 
@@ -145,6 +146,8 @@ def parse_sqlite(path: Path, log: LogFn, origin: str = "") -> tuple[list[Importe
     try:
         if looks_like_opentune(conn):
             return parse_opentune(conn, log, origin), "OpenTune backup"
+        if looks_like_vitune(conn):
+            return parse_vitune(conn, log, origin), "ViTune backup"
         return _scan_every_table(conn, path.name, origin, log), "SQLite database"
     finally:
         conn.close()

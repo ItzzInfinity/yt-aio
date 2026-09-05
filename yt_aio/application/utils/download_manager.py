@@ -49,6 +49,117 @@ def resolve_download_title(
     return data.get("title") or target.url
 
 
+# Docs/06_YTDLNIS_APPROACH.md section 3.3. YouTube's auto-generated music channels are
+# named "<artist> - Topic", and that suffix ends up in the file's uploader and artist
+# tags. The first rule rewrites uploader to everything before " - Topic"; the second
+# copies the cleaned uploader into artist. Verified against a real Topic upload: the
+# uploader went from "WB V2 MIX - Topic" to "WB V2 MIX".
+PARSE_METADATA_RULES = (
+    "%(uploader,channel,creator|)l:^(?P<uploader>.*?)(?:(?= - Topic)|$)",
+    "%(uploader)s:%(artist)s",
+)
+# Off by default: a playlist title is often a mood or a mix name, not an album, and a
+# wrong album tag is harder to notice than a missing one.
+PLAYLIST_ALBUM_RULE = "%(playlist_title)s:%(album)s"
+
+
+def build_metadata_args(config: dict[str, Any]) -> list[str]:
+    """Tag-writing options. --embed-metadata is the current name for --add-metadata."""
+    args = ["--embed-metadata"]
+    for rule in PARSE_METADATA_RULES:
+        args.extend(["--parse-metadata", rule])
+    if config.get("embed_album_from_playlist"):
+        args.extend(["--parse-metadata", PLAYLIST_ALBUM_RULE])
+    return args
+
+
+def build_tuning_args(config: dict[str, Any]) -> list[str]:
+    """Throughput and robustness options (06_YTDLNIS_APPROACH.md section 3.8).
+
+    The retry counts are separate from `max_retries`, which governs our own re-run of the
+    whole command. Sharing one number would multiply the two together.
+    """
+    args: list[str] = []
+
+    def whole(key: str, default: int, low: int, high: int) -> int:
+        try:
+            return min(high, max(low, int(config.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    args.extend(["-N", str(whole("concurrent_fragments", 4, 1, 16))])
+    args.extend(["--retries", str(whole("download_retries", 10, 0, 100))])
+    args.extend(["--fragment-retries", str(whole("fragment_retries", 10, 0, 100))])
+
+    limit = str(config.get("limit_rate") or "").strip()
+    if limit:
+        args.extend(["-r", limit])
+
+    if config.get("restrict_filenames"):
+        args.append("--restrict-filenames")
+
+    return args
+
+
+def build_audio_format_args(config: dict[str, Any]) -> list[str]:
+    """Audio selection as a preference, not a filter (06_YTDLNIS_APPROACH.md section 3.4).
+
+    The old `-f bestaudio[ext=m4a]/bestaudio` rejects everything that is not m4a before it
+    looks at quality. `-f ba/b` accepts any audio and `-S` then ranks what came back, so a
+    better opus stream is still reachable when no m4a exists.
+
+    The source document ends its sort with `+size`, which is dropped here. User sort terms
+    outrank yt-dlp's own bitrate term, so `+size` asks for the smallest stream rather than
+    the best one: on a real track it chose 49 kbps where every other selector chose 130.
+    That trade belongs to a phone on mobile data, not to a music library.
+    """
+    container = str(config.get("default_audio_quality", "m4a") or "m4a")
+    codec = str(config.get("preferred_audio_codec") or "").strip()
+
+    sort_terms = ["hasaud"]
+    if codec:
+        sort_terms.append(f"acodec:{codec}")
+    if container and container != "best":
+        sort_terms.append(f"aext:{container}")
+
+    return [
+        "-f",
+        "ba/b",
+        "-S",
+        ",".join(sort_terms),
+        "--extract-audio",
+        "--audio-format",
+        container,
+        "--audio-quality",
+        "0",
+    ]
+
+
+def build_archive_args(config: dict[str, Any]) -> list[str]:
+    """--download-archive (06_YTDLNIS_APPROACH.md section 3.2).
+
+    The archive and the database answer different questions. yt-dlp reads the archive and
+    refuses the fetch, with no gap between the check and the download; the `downloads`
+    table is what the Library and Local Scan tabs read. Both are kept.
+
+    On by default, but behind a switch, because an archive silently skipping a file the
+    operator explicitly asked for is surprising the first time it happens.
+    """
+    if not config.get("enable_download_archive", True):
+        return []
+
+    raw = str(config.get("download_archive_path") or "./db/downloaded.txt")
+    resolved = resolve_runtime_path(raw) or raw
+    archive = Path(resolved).expanduser()
+    try:
+        archive.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # An unwritable archive path must not stop the download; yt-dlp would fail on it,
+        # so drop the option and let the database check carry the duplicate detection.
+        return []
+    return ["--download-archive", str(archive)]
+
+
 def build_download_command(
     url: str,
     media_type: str,
@@ -61,7 +172,9 @@ def build_download_command(
         "--newline",
         "--ignore-errors",
         "--no-overwrites",
-        "--add-metadata",
+        *build_metadata_args(config),
+        *build_tuning_args(config),
+        *build_archive_args(config),
         "--paths",
         download_dir,
         "--print",
@@ -84,17 +197,7 @@ def build_download_command(
             ]
         )
     else:
-        command.extend(
-            [
-                "-f",
-                "bestaudio[ext=m4a]/bestaudio",
-                "--extract-audio",
-                "--audio-format",
-                str(config.get("default_audio_quality", "m4a")),
-                "--audio-quality",
-                "0",
-            ]
-        )
+        command.extend(build_audio_format_args(config))
         if config.get("download_thumbnail"):
             command.append("--embed-thumbnail")
 

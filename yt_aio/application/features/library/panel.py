@@ -22,7 +22,10 @@ from ...db.queries import (
     DEFAULT_LIBRARY_SORT,
     database_stats,
     delete_videos,
+    fetch_albums,
+    fetch_artists,
     fetch_channels,
+    fetch_playlists,
     fetch_sources,
     fetch_videos,
 )
@@ -64,6 +67,9 @@ COLUMNS: list[tuple[str, str | None]] = [
     ("Video ID", "video_id"),
     ("Title", "title"),
     ("Channel", "channel_name"),
+    ("Artists", "artists"),
+    ("Album", "album"),
+    ("Playlists", "playlists"),
     ("Duration", "duration"),
     ("Uploaded", "upload_date"),
     ("Cached", "cached_at"),
@@ -71,7 +77,7 @@ COLUMNS: list[tuple[str, str | None]] = [
     ("Downloads", "download_count"),
 ]
 HEADERS = [heading for heading, _ in COLUMNS]
-NUMERIC_COLUMNS = {4, 8}
+NUMERIC_COLUMNS = {7, 11}
 
 COMPLETENESS = {
     "Everything": "all",
@@ -109,13 +115,14 @@ class LibraryPanel(QWidget):
         self.completeness_select.addItems(list(COMPLETENESS))
 
         # Editable so a long channel list can be typed through rather than scrolled.
-        self.channel_select = QComboBox()
-        self.channel_select.setEditable(True)
-        self.channel_select.setMinimumWidth(170)
-        completer = self.channel_select.completer()
-        if completer is not None:
-            completer.setCaseSensitivity(CASE_INSENSITIVE)
-            completer.setFilterMode(MATCH_CONTAINS)
+        self.channel_select = self._lookup_box("Any channel")
+
+        # Artists, album and playlists come from the music tables, so these filter on a
+        # relationship rather than on one text column: a song credited to three artists is
+        # found by any of the three (Docs/07_MUSIC_SCHEMA_PLAN.md).
+        self.artist_select = self._lookup_box("Any artist")
+        self.album_select = self._lookup_box("Any album")
+        self.playlist_select = self._lookup_box("Any playlist")
 
         self.min_minutes = QSpinBox()
         self.min_minutes.setRange(0, MAX_FILTER_MINUTES)
@@ -155,9 +162,17 @@ class LibraryPanel(QWidget):
         first_row.addWidget(QLabel("Search"))
         first_row.addWidget(self.search_input, 1)
         first_row.addWidget(QLabel("Channel"))
-        first_row.addWidget(self.channel_select)
+        first_row.addWidget(self.channel_select, 1)
         first_row.addWidget(QLabel("Source"))
         first_row.addWidget(self.source_select)
+
+        music_row = QHBoxLayout()
+        music_row.addWidget(QLabel("Artist"))
+        music_row.addWidget(self.artist_select, 1)
+        music_row.addWidget(QLabel("Album"))
+        music_row.addWidget(self.album_select, 1)
+        music_row.addWidget(QLabel("Playlist"))
+        music_row.addWidget(self.playlist_select, 1)
 
         second_row = QHBoxLayout()
         second_row.addWidget(QLabel("Duration"))
@@ -173,6 +188,7 @@ class LibraryPanel(QWidget):
         second_row.addWidget(self.refresh_button)
 
         filter_column.addLayout(first_row)
+        filter_column.addLayout(music_row)
         filter_column.addLayout(second_row)
 
         action_row = QHBoxLayout()
@@ -196,6 +212,9 @@ class LibraryPanel(QWidget):
         self.source_select.currentIndexChanged.connect(self._reset_and_reload)
         self.completeness_select.currentTextChanged.connect(self._reset_and_reload)
         self.channel_select.currentTextChanged.connect(self._reset_and_reload)
+        self.artist_select.currentTextChanged.connect(self._reset_and_reload)
+        self.album_select.currentTextChanged.connect(self._reset_and_reload)
+        self.playlist_select.currentTextChanged.connect(self._reset_and_reload)
         self.min_minutes.valueChanged.connect(self._reset_and_reload)
         self.max_minutes.valueChanged.connect(self._reset_and_reload)
         self.page_size.valueChanged.connect(self._reset_and_reload)
@@ -217,9 +236,54 @@ class LibraryPanel(QWidget):
             self._loaded_once = True
             self._load_sources()
             self._load_channels()
+            self._load_music_lookups()
             self._reload()
 
     # ------------------------------------------------------------------ helpers
+    def _lookup_box(self, placeholder: str) -> QComboBox:
+        """An editable drop-down that offers exact values and accepts a partial one."""
+        box = QComboBox()
+        box.setEditable(True)
+        box.setMinimumWidth(150)
+        # A list of two thousand long names would otherwise give the box a size hint wide
+        # enough to swallow the whole filter row.
+        box.setMaximumWidth(340)
+        completer = box.completer()
+        if completer is not None:
+            completer.setCaseSensitivity(CASE_INSENSITIVE)
+            completer.setFilterMode(MATCH_CONTAINS)
+        line = box.lineEdit()
+        if line is not None:
+            line.setPlaceholderText(placeholder)
+        return box
+
+    @staticmethod
+    def _fill_lookup(box: QComboBox, values: list[str], noun: str) -> None:
+        """Refill a drop-down without losing what is typed in it."""
+        current = box.currentText()
+        box.blockSignals(True)
+        box.clear()
+        box.addItem("")
+        box.addItems(values)
+        box.setCurrentText(current)
+        box.blockSignals(False)
+        line = box.lineEdit()
+        if line is not None:
+            line.setPlaceholderText(f"Any of {len(values)} {noun}")
+
+    def _load_music_lookups(self) -> None:
+        """Fill the artist, album and playlist drop-downs from the music tables."""
+        for box, loader, noun in (
+            (self.artist_select, fetch_artists, "artist(s)"),
+            (self.album_select, fetch_albums, "album(s)"),
+            (self.playlist_select, fetch_playlists, "playlist(s)"),
+        ):
+            try:
+                values = loader(self._ctx.db_path)
+            except Exception:
+                values = []
+            self._fill_lookup(box, values, noun)
+
     def _load_sources(self) -> None:
         try:
             self._sources = fetch_sources(self._ctx.db_path)
@@ -240,14 +304,7 @@ class LibraryPanel(QWidget):
             channels = fetch_channels(self._ctx.db_path)
         except Exception:
             channels = []
-        current = self.channel_select.currentText()
-        self.channel_select.blockSignals(True)
-        self.channel_select.clear()
-        self.channel_select.addItem("")
-        self.channel_select.addItems(channels)
-        self.channel_select.setCurrentText(current)
-        self.channel_select.blockSignals(False)
-        self.channel_select.lineEdit().setPlaceholderText(f"Any of {len(channels)} channel(s)")
+        self._fill_lookup(self.channel_select, channels, "channel(s)")
 
     def _selected_source_id(self) -> int | None:
         return self.source_select.currentData()
@@ -291,6 +348,9 @@ class LibraryPanel(QWidget):
                 record.get("video_id") or "",
                 record.get("title") or "",
                 record.get("channel_name") or record.get("playlist_name") or "",
+                record.get("artists") or "",
+                record.get("album") or "",
+                record.get("playlists") or "",
                 format_duration(record.get("duration")),
                 record.get("upload_date") or "",
                 record.get("cached_at") or "",
@@ -343,6 +403,9 @@ class LibraryPanel(QWidget):
                 source_id=self._selected_source_id(),
                 completeness=COMPLETENESS[self.completeness_select.currentText()],
                 channel=self.channel_select.currentText(),
+                artist=self.artist_select.currentText(),
+                album=self.album_select.currentText(),
+                playlist=self.playlist_select.currentText(),
                 min_duration=low,
                 max_duration=high,
                 sort_key=self._sort_key,
@@ -377,6 +440,8 @@ class LibraryPanel(QWidget):
     def _clear_filters(self) -> None:
         self.search_input.clear()
         self.channel_select.setCurrentText("")
+        for box in (self.artist_select, self.album_select, self.playlist_select):
+            box.setCurrentText("")
         for widget in (self.min_minutes, self.max_minutes):
             widget.setValue(0)
         self.source_select.setCurrentIndex(0)

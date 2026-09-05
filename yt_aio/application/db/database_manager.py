@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import re
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 from ... import APP_CHANGELOG, APP_VERSION
+
+
+def now_string() -> str:
+    """Local time, second resolution. Matches the format utils/shared.py writes."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -144,6 +152,157 @@ def _backfill_relations(conn: sqlite3.Connection) -> None:
         )
 
 
+_SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def clean_name(value: Any) -> str:
+    """Trim a display name and make every run of whitespace one ordinary space.
+
+    Backups carry characters that look like a space and are not. A real ViTune file
+    stores "Arijit\u00a0singh" with a non-breaking space, and a name like that can never
+    be matched by anyone typing it, which silently empties an artist filter. Python's
+    \\s covers the non-breaking and thin spaces as well as the ordinary one.
+    """
+    return _WHITESPACE.sub(" ", str(value or "")).strip()
+
+
+def _slug(text: str) -> str:
+    """A stable key for a name that has no identifier of its own.
+
+    Accents are folded and everything else collapses to single hyphens, so "Arijit Singh"
+    and "arijit  singh" reach the same artist row instead of two.
+    """
+    folded = unicodedata.normalize("NFKD", clean_name(text))
+    ascii_only = "".join(char for char in folded if not unicodedata.combining(char))
+    return _SLUG_STRIP.sub("-", ascii_only.casefold()).strip("-")
+
+
+def artist_id_for(name: str, channel_id: str | None = None) -> str:
+    """A real channel id when there is one; otherwise a key derived from the name.
+
+    Most sources hand us an artist name and nothing else: a CSV column, a file tag, a
+    channel_name. Refusing those would drop most of the artists we actually have.
+    """
+    if channel_id:
+        return str(channel_id).strip()
+    return f"name:{_slug(name)}"
+
+
+def album_id_for(title: str, browse_id: str | None = None) -> str:
+    if browse_id:
+        return str(browse_id).strip()
+    return f"title:{_slug(title)}"
+
+
+def playlist_id_for(name: str, list_id: str | None = None) -> str:
+    if list_id:
+        return str(list_id).strip()
+    return f"name:{_slug(name)}"
+
+
+def _music_backfill_done(conn: sqlite3.Connection) -> bool:
+    """The backfill runs once. A songs table with anything in it has already had it.
+
+    Guarding on the row count rather than a flag means a database restored from before
+    the music tables existed is still picked up, and a user who deliberately emptied
+    songs gets it rebuilt.
+    """
+    return bool(conn.execute("SELECT 1 FROM songs LIMIT 1").fetchone())
+
+
+def _backfill_music_tables(conn: sqlite3.Connection) -> None:
+    """Revive youtube_video_information under a video-id key (07_MUSIC_SCHEMA_PLAN.md 3).
+
+    Reads and never destroys. youtube_video_information keeps its integer id and the
+    video_info_id references from downloads, so nothing that works today stops working.
+    """
+    if _music_backfill_done(conn):
+        return
+
+    rows = conn.execute(
+        """
+        SELECT video_id, title, channel_name, playlist_name, upload_date,
+               duration, thumbnail_url, video_url, cached_at
+        FROM youtube_video_information
+        WHERE video_id IS NOT NULL AND TRIM(video_id) <> ''
+        ORDER BY COALESCE(cached_at, '') ASC
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    stamp = now_string()
+    downloaded = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT video_id FROM downloads WHERE status = 'success' AND video_id IS NOT NULL"
+        )
+    }
+
+    songs: dict[str, tuple] = {}
+    artists: dict[str, str] = {}
+    playlists: dict[str, str] = {}
+    song_artists: dict[tuple[str, str], int] = {}
+    song_playlists: set[tuple[str, str]] = set()
+
+    for row in rows:
+        video_id = str(row["video_id"]).strip()
+        # Ordered oldest first, so a later, richer row simply replaces the earlier one.
+        songs[video_id] = (
+            video_id,
+            str(row["title"] or ""),
+            row["duration"],
+            row["thumbnail_url"],
+            row["video_url"] or f"https://www.youtube.com/watch?v={video_id}",
+            row["upload_date"],
+            1 if video_id in downloaded else 0,
+            stamp,
+            stamp,
+        )
+
+        # channel_name is not split on commas. No row in the wild has one, and a channel
+        # legitimately named "Smith, Jones & Co" would be torn in half by the guess. The
+        # import path supplies a real artist list instead.
+        name = clean_name(row["channel_name"])
+        if name:
+            key = artist_id_for(name)
+            artists[key] = name
+            song_artists[(video_id, key)] = 0
+
+        playlist_name = clean_name(row["playlist_name"])
+        if playlist_name:
+            key = playlist_id_for(playlist_name)
+            playlists[key] = playlist_name
+            song_playlists.add((video_id, key))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO artists (artist_id, name, first_seen) VALUES (?, ?, ?)",
+        [(key, name, stamp) for key, name in artists.items()],
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO playlists (playlist_id, name, origin, first_seen) VALUES (?, ?, ?, ?)",
+        [(key, name, "backfill:youtube_video_information", stamp) for key, name in playlists.items()],
+    )
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO songs
+            (video_id, title, duration, thumbnail_url, video_url, upload_date,
+             downloaded, first_seen, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        list(songs.values()),
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO song_artists (video_id, artist_id, position) VALUES (?, ?, ?)",
+        [(video_id, artist, position) for (video_id, artist), position in song_artists.items()],
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO song_playlists (video_id, playlist_id) VALUES (?, ?)",
+        sorted(song_playlists),
+    )
+
+
 def init_db(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.executescript(
@@ -248,6 +407,71 @@ def init_db(db_path: str) -> None:
                 release_date TEXT,
                 changelog TEXT
             );
+
+            -- Music library layer (Docs/07_MUSIC_SCHEMA_PLAN.md). Keyed by the identifier
+            -- YouTube already assigned, so nothing has to be renumbered across a merge,
+            -- a backup or a re-import. youtube_video_information stays as the raw fetch
+            -- cache underneath; these tables are what the library is made of.
+            CREATE TABLE IF NOT EXISTS artists (
+                artist_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                thumbnail_url TEXT,
+                channel_url TEXT,
+                first_seen TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS albums (
+                album_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                year TEXT,
+                thumbnail_url TEXT,
+                first_seen TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS playlists (
+                playlist_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                origin TEXT,
+                first_seen TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS songs (
+                video_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                duration INTEGER,
+                thumbnail_url TEXT,
+                video_url TEXT,
+                upload_date TEXT,
+                album_id TEXT,
+                liked INTEGER NOT NULL DEFAULT 0,
+                in_library INTEGER NOT NULL DEFAULT 0,
+                downloaded INTEGER NOT NULL DEFAULT 0,
+                play_count INTEGER NOT NULL DEFAULT 0,
+                bitrate_label TEXT,
+                first_seen TEXT,
+                last_updated TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS song_artists (
+                video_id TEXT NOT NULL,
+                artist_id TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (video_id, artist_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS song_albums (
+                video_id TEXT NOT NULL,
+                album_id TEXT NOT NULL,
+                position INTEGER,
+                PRIMARY KEY (video_id, album_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS song_playlists (
+                video_id TEXT NOT NULL,
+                playlist_id TEXT NOT NULL,
+                position INTEGER,
+                PRIMARY KEY (video_id, playlist_id)
+            );
             """
         )
 
@@ -319,7 +543,20 @@ def init_db(db_path: str) -> None:
             "CREATE INDEX IF NOT EXISTS {name} ON local_files(match_status)",
         )
 
+        for name, statement in (
+            ("idx_artists_name", "CREATE UNIQUE INDEX IF NOT EXISTS {name} ON artists(name COLLATE NOCASE)"),
+            ("idx_albums_title", "CREATE INDEX IF NOT EXISTS {name} ON albums(title COLLATE NOCASE)"),
+            ("idx_playlists_name", "CREATE INDEX IF NOT EXISTS {name} ON playlists(name COLLATE NOCASE)"),
+            ("idx_songs_title", "CREATE INDEX IF NOT EXISTS {name} ON songs(title COLLATE NOCASE)"),
+            ("idx_songs_album_id", "CREATE INDEX IF NOT EXISTS {name} ON songs(album_id)"),
+            ("idx_song_artists_artist", "CREATE INDEX IF NOT EXISTS {name} ON song_artists(artist_id)"),
+            ("idx_song_albums_album", "CREATE INDEX IF NOT EXISTS {name} ON song_albums(album_id)"),
+            ("idx_song_playlists_playlist", "CREATE INDEX IF NOT EXISTS {name} ON song_playlists(playlist_id)"),
+        ):
+            _ensure_index(conn, name, statement)
+
         _backfill_relations(conn)
+        _backfill_music_tables(conn)
 
         # Drop columns no longer needed
         columns = _table_columns(conn, "youtube_video_information")
@@ -351,6 +588,144 @@ def init_db(db_path: str) -> None:
                 """,
                 (APP_CHANGELOG, existing["id"]),
             )
+
+
+
+def _split_names(value: Any) -> list[str]:
+    """A list stays a list; a comma-separated string becomes one, blanks dropped."""
+    if value in (None, ""):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        candidates = [str(entry) for entry in value]
+    else:
+        candidates = str(value).split(",")
+    names: list[str] = []
+    for candidate in candidates:
+        name = clean_name(candidate)
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
+    """Merge songs and their artists, album and playlists (07_MUSIC_SCHEMA_PLAN.md 4).
+
+    A column is only overwritten when the incoming value is not empty, so a thin CSV
+    import can never blank a title a full metadata fetch established. Junction rows are
+    only touched for the kinds the payload actually mentions: an absent `artists` key
+    means "this source knows nothing about artists", which is not the same as "this song
+    has no artists", and silently deleting the credits would be the worse reading.
+    """
+    if not payloads:
+        return 0
+
+    stamp = now_string()
+    written = 0
+
+    with _connect(db_path) as conn:
+        for payload in payloads:
+            video_id = str(payload.get("video_id") or "").strip()
+            if not video_id:
+                continue
+
+            album_title = clean_name(payload.get("album"))
+            album_key = album_id_for(album_title, payload.get("album_id")) if album_title else None
+            if album_key:
+                conn.execute(
+                    """
+                    INSERT INTO albums (album_id, title, year, thumbnail_url, first_seen)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(album_id) DO UPDATE SET
+                        title = COALESCE(NULLIF(albums.title, ''), excluded.title),
+                        year = COALESCE(NULLIF(albums.year, ''), excluded.year),
+                        thumbnail_url = COALESCE(NULLIF(albums.thumbnail_url, ''), excluded.thumbnail_url)
+                    """,
+                    (album_key, album_title, payload.get("year"), payload.get("album_thumbnail"), stamp),
+                )
+
+            conn.execute(
+                """
+                INSERT INTO songs (
+                    video_id, title, duration, thumbnail_url, video_url, upload_date,
+                    album_id, liked, in_library, downloaded, play_count, bitrate_label,
+                    first_seen, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    title = COALESCE(NULLIF(excluded.title, ''), songs.title),
+                    duration = COALESCE(excluded.duration, songs.duration),
+                    thumbnail_url = COALESCE(NULLIF(excluded.thumbnail_url, ''), songs.thumbnail_url),
+                    video_url = COALESCE(NULLIF(excluded.video_url, ''), songs.video_url),
+                    upload_date = COALESCE(NULLIF(excluded.upload_date, ''), songs.upload_date),
+                    album_id = COALESCE(excluded.album_id, songs.album_id),
+                    liked = MAX(songs.liked, excluded.liked),
+                    in_library = MAX(songs.in_library, excluded.in_library),
+                    downloaded = MAX(songs.downloaded, excluded.downloaded),
+                    play_count = MAX(songs.play_count, excluded.play_count),
+                    bitrate_label = COALESCE(NULLIF(excluded.bitrate_label, ''), songs.bitrate_label),
+                    last_updated = excluded.last_updated
+                """,
+                (
+                    video_id,
+                    str(payload.get("title") or ""),
+                    payload.get("duration"),
+                    payload.get("thumbnail_url"),
+                    payload.get("video_url") or f"https://www.youtube.com/watch?v={video_id}",
+                    payload.get("upload_date"),
+                    album_key,
+                    1 if payload.get("liked") else 0,
+                    1 if payload.get("in_library") else 0,
+                    1 if payload.get("downloaded") else 0,
+                    int(payload.get("play_count") or 0),
+                    payload.get("bitrate_label"),
+                    stamp,
+                    stamp,
+                ),
+            )
+
+            if album_key:
+                conn.execute(
+                    "INSERT OR IGNORE INTO song_albums (video_id, album_id, position) VALUES (?, ?, ?)",
+                    (video_id, album_key, payload.get("track_number")),
+                )
+
+            if "artists" in payload:
+                for position, name in enumerate(_split_names(payload.get("artists"))):
+                    key = artist_id_for(name)
+                    conn.execute(
+                        """
+                        INSERT INTO artists (artist_id, name, first_seen) VALUES (?, ?, ?)
+                        ON CONFLICT(artist_id) DO UPDATE SET
+                            name = COALESCE(NULLIF(artists.name, ''), excluded.name)
+                        """,
+                        (key, name, stamp),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO song_artists (video_id, artist_id, position) VALUES (?, ?, ?)
+                        ON CONFLICT(video_id, artist_id) DO UPDATE SET position = excluded.position
+                        """,
+                        (video_id, key, position),
+                    )
+
+            if "playlists" in payload:
+                for name in _split_names(payload.get("playlists")):
+                    key = playlist_id_for(name)
+                    conn.execute(
+                        """
+                        INSERT INTO playlists (playlist_id, name, origin, first_seen) VALUES (?, ?, ?, ?)
+                        ON CONFLICT(playlist_id) DO UPDATE SET
+                            name = COALESCE(NULLIF(playlists.name, ''), excluded.name)
+                        """,
+                        (key, name, payload.get("origin"), stamp),
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO song_playlists (video_id, playlist_id) VALUES (?, ?)",
+                        (video_id, key),
+                    )
+
+            written += 1
+
+    return written
 
 
 def upsert_source(db_path: str, payload: dict[str, Any]) -> int:
@@ -450,6 +825,32 @@ def log_download(db_path: str, payload: dict[str, Any]) -> None:
         )
 
 
+def _song_payload_from_video_info(payload: dict[str, Any]) -> dict[str, Any]:
+    """Turn one youtube_video_information payload into an upsert_songs payload.
+
+    The listing knows one uploader and, for a playlist source, one playlist name. Those
+    keys are only included when there is something to say, because upsert_songs treats an
+    absent key as "this source knows nothing here" and leaves the stored rows alone.
+    """
+    song: dict[str, Any] = {
+        "video_id": payload.get("video_id"),
+        "title": payload.get("title") or "",
+        "duration": payload.get("duration"),
+        "thumbnail_url": payload.get("thumbnail_url"),
+        "video_url": payload.get("video_url"),
+        "upload_date": payload.get("upload_date"),
+    }
+    channel = str(payload.get("channel_name") or "").strip()
+    if channel:
+        song["artists"] = [channel]
+    playlist = str(payload.get("playlist_name") or "").strip()
+    if playlist:
+        song["playlists"] = [playlist]
+        song["origin"] = "listing"
+    return song
+
+
+
 def log_video_info(db_path: str, payload: dict[str, Any]) -> int | None:
     init_db(db_path)
     video_id = payload.get("video_id")
@@ -493,7 +894,12 @@ def log_video_info(db_path: str, payload: dict[str, Any]) -> int | None:
             "SELECT id FROM youtube_video_information WHERE video_id = ?",
             (video_id,),
         ).fetchone()
-        return int(row["id"]) if row else None
+        info_id = int(row["id"]) if row else None
+
+    # Outside the transaction above: the music tables are a separate write, and a failure
+    # there must not lose the cache row that already succeeded.
+    upsert_songs(db_path, [_song_payload_from_video_info(payload)])
+    return info_id
 
 
 def log_video_info_batch(db_path: str, payloads: list[dict[str, Any]]) -> list[int | None]:
@@ -546,6 +952,10 @@ def log_video_info_batch(db_path: str, payloads: list[dict[str, Any]]) -> list[i
                 (video_id,),
             ).fetchone()
             ids.append(int(row["id"]) if row else None)
+
+    # One call for the whole batch, outside the cache transaction for the same reason as
+    # in log_video_info: a music-table failure must not cost the cache rows.
+    upsert_songs(db_path, [_song_payload_from_video_info(payload) for payload in payloads])
     return ids
 
 

@@ -47,10 +47,11 @@ from ...ui.qt import (
     pyqtSlot,
 )
 from ...ui.widgets import muted
+from ...utils.browser_cookies import describe as describe_browser
 from ...utils.config_manager import SETTING_RANGES, SETTING_SUGGESTIONS, build_default_config
 
-DIRECTORY_KEYS = {"default_download_path", "logs_directory", "cookie_fallback_home"}
-FILE_KEYS = {"log_file_path", "history_file_path", "cookie_file"}
+DIRECTORY_KEYS = {"default_download_path", "logs_directory", "cookie_fallback_home", "info_cache_dir"}
+FILE_KEYS = {"log_file_path", "history_file_path", "cookie_file", "download_archive_path"}
 
 HELP = {
     "default_download_path": "Where finished media is written.",
@@ -58,11 +59,35 @@ HELP = {
     "history_file_path": "Usually the same database as log_file_path.",
     "logs_directory": "Reserved for file-based logs. Relative paths resolve from yt_aio/application.",
     "max_concurrent_downloads": "How many downloads run at once.",
-    "max_metadata_workers": "How many metadata fetches run at once.",
+    "max_metadata_workers": "How many yt-dlp metadata processes run at once.",
+    "metadata_batch_size": "How many videos one of those processes is asked for in a single run.",
     "playlist_chunk_size": "How many flat-playlist entries are handled per batch.",
     "fetch_full_metadata": "Off keeps listing fast and stores partial metadata only.",
     "cookie_fallback_enabled": "Retry with browser cookies when YouTube raises a bot check.",
+    "cookie_fallback_browser": "Which browser to take cookies from.",
+    "cookie_fallback_profile": "Which profile inside that browser. Empty means the default one.",
+    "cookie_fallback_home": (
+        "Only needed for a confined install. yt-dlp looks under $HOME/.config, which is not where a\n"
+        "snap or a flatpak keeps its profile, so this points it at the right place. Leave it empty and\n"
+        "the path is worked out from the browser above."
+    ),
     "youtube_visitor_data": "Token used for some YouTube requests. Kept out of the change log.",
+    "youtube_player_clients": "Extraction clients to try, comma separated. The current first answer to bot checks.",
+    "youtube_po_tokens": "Proof-of-origin tokens, comma separated, each written as context.type+value.",
+    "info_cache_enabled": "Reuse stored metadata so a second pass over the same videos runs no yt-dlp at all.",
+    "info_cache_dir": "One JSON file per video. Relative paths resolve from yt_aio/application.",
+    "info_cache_max_age_hours": "How long a cached file counts as fresh. Zero means it never expires.",
+    "enable_download_archive": "Let yt-dlp refuse anything it has already fetched. The database check stays either way.",
+    "download_archive_path": "One line per fetched video. A relative path resolves from yt_aio/application.",
+    "preferred_audio_codec": "Ranked first when several audio streams exist. Empty means no codec preference.",
+    "concurrent_fragments": "Fragments fetched at once for a single file. The main speed-up on large files.",
+    "download_retries": "yt-dlp's own retries, separate from max_retries, which re-runs the whole command.",
+    "fragment_retries": "yt-dlp's own per-fragment retries.",
+    "limit_rate": "Bandwidth cap such as 2M. Empty means no cap.",
+    "restrict_filenames": "Write ASCII-only file names with no spaces.",
+    "embed_album_from_playlist": "Write the playlist title into the album tag. Off, because a playlist is often a mix, not an album.",
+    "socket_timeout": "How long yt-dlp waits on a stalled connection before giving up on an entry.",
+    "ui_theme": "dark is Night Mode, light is Day Mode. Applied to the whole window on Save.",
 }
 
 
@@ -222,6 +247,13 @@ class SettingsPanel(QWidget):
             editor = self._make_editor(key, value)
             self._editors[key] = editor
             label_text = key if key not in HELP else f"{key}\n{HELP[key]}"
+            if key == "cookie_fallback_browser":
+                # What is actually installed, not what could be. Recomputed on every
+                # build, so plugging in a browser and pressing Reload shows it.
+                try:
+                    label_text += f"\n{describe_browser(str(value or ''))}"
+                except Exception:
+                    pass
             label = QLabel(label_text)
             label.setWordWrap(True)
             self.form.addRow(label, self._row_widget(key, editor))

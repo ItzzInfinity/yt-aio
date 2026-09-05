@@ -5,6 +5,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+# ui.theme is a leaf module: it imports nothing from this package, so naming it here
+# keeps the theme roster in one place without making a cycle.
+from ..ui.theme import DEFAULT_THEME, theme_names
+from .browser_cookies import CHROMIUM_BROWSERS, all_profile_names, cookie_home_suggestions
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 APPLICATION_ROOT = PACKAGE_ROOT / "application"
@@ -18,6 +23,8 @@ RUNTIME_PATH_KEYS = {
     "logs_directory",
     "cookie_file",
     "cookie_fallback_home",
+    "download_archive_path",
+    "info_cache_dir",
 }
 RUNTIME_RELATIVE_DEFAULTS = {
     "log_file_path": "./db/yt_aio.db",
@@ -57,6 +64,8 @@ SETTING_SUGGESTIONS: dict[str, list[str]] = {
         "worst",
     ],
     "default_audio_quality": ["m4a", "mp3", "opus", "vorbis", "flac", "wav", "aac", "alac", "best"],
+    "preferred_audio_codec": ["aac", "opus", "mp3", "flac", "vorbis", "alac", ""],
+    "limit_rate": ["", "500K", "1M", "2M", "5M", "10M"],
     "log_level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "proxy": [
         "",
@@ -84,26 +93,23 @@ SETTING_SUGGESTIONS: dict[str, list[str]] = {
     "thumbnail_quality": ["best", "worst"],
     "description_format": ["txt", "json"],
     "comments_format": ["txt", "json"],
+    "download_archive_path": ["./db/downloaded.txt"],
+    "info_cache_dir": ["./db/info_cache"],
+    "youtube_player_clients": ["", "default", "default,web_safari", "default,web_safari,tv", "tv", "web", "android", "ios", "mweb"],
+    "youtube_po_tokens": [""],
     "log_file_path": ["./db/yt_aio.db"],
     "history_file_path": ["./db/yt_aio.db"],
     "history_file_table_name": ["downloads", "youtube_video_information", "local_files"],
     "logs_directory": ["./logs"],
-    "cookie_fallback_browser": [
-        "brave",
-        "chrome",
-        "chromium",
-        "edge",
-        "firefox",
-        "opera",
-        "safari",
-        "vivaldi",
-        "whale",
-    ],
-    "cookie_fallback_profile": ["", "Default", "Profile 1", "Profile 2"],
-    "cookie_fallback_home": ["", str(Path.home())],
+    "cookie_fallback_browser": sorted({*CHROMIUM_BROWSERS, "firefox", "safari"}),
+    # Discovered rather than guessed: a profile that is not there is not worth offering,
+    # and a snap or flatpak home is not something anyone should have to type from memory.
+    "cookie_fallback_profile": ["", *all_profile_names()],
+    "cookie_fallback_home": cookie_home_suggestions(),
     "cookie_file": ["", str(Path.home() / "cookies.txt")],
     "youtube_visitor_data": [""],
     "youtube_remote_components": ["", "ejs:github", "ejs:npm", "web", "web_safari", "android", "ios", "tv"],
+    "ui_theme": theme_names(),
 }
 
 # Numbers get a range and a hint rather than a list, because the editor is a spin box.
@@ -114,6 +120,12 @@ SETTING_RANGES: dict[str, tuple[int, int, str]] = {
     "max_concurrent_downloads": (1, 32, f"Typical: cores minus two, here {max(1, (os.cpu_count() or 4) - 2)}."),
     "max_metadata_workers": (1, 32, "Typical: 4. Higher trips YouTube rate limits sooner."),
     "playlist_chunk_size": (10, 2000, "Flat-playlist entries handled per batch. Typical: 100."),
+    "socket_timeout": (1, 300, "Seconds yt-dlp waits on a stalled socket. Typical: 15."),
+    "metadata_batch_size": (1, 500, "URLs handed to one yt-dlp process. Typical: 25."),
+    "info_cache_max_age_hours": (0, 8760, "How long a cached info file counts as fresh. Typical: 168, a week. Zero never expires."),
+    "concurrent_fragments": (1, 16, "Fragments fetched at once for one file. Typical: 4."),
+    "download_retries": (0, 100, "yt-dlp's own retries for a whole download. Typical: 10."),
+    "fragment_retries": (0, 100, "yt-dlp's own retries for one fragment. Typical: 10."),
 }
 
 
@@ -131,6 +143,7 @@ def build_default_config() -> dict[str, Any]:
         "default_download_path": _default_download_path(),
         "default_video_quality": "bv*+ba/b",
         "default_audio_quality": "m4a",
+        "preferred_audio_codec": "aac",
         "max_retries": 3,
         "retry_delay": 5,
         "log_file_path": _default_db_path(),
@@ -143,6 +156,7 @@ def build_default_config() -> dict[str, Any]:
         "download_subtitles": False,
         "subtitle_language": "en",
         "download_thumbnail": False,
+        "embed_album_from_playlist": False,
         "thumbnail_quality": "best",
         "download_description": False,
         "description_format": "txt",
@@ -159,10 +173,25 @@ def build_default_config() -> dict[str, Any]:
         "cookie_fallback_home": None,
         "cookie_file": None,
         "youtube_visitor_data": None,
+        "youtube_player_clients": None,
+        "youtube_po_tokens": None,
+        "info_cache_enabled": True,
+        "info_cache_dir": "./db/info_cache",
+        "info_cache_max_age_hours": 168,
         "youtube_remote_components": "ejs:github",
         "logs_directory": "./logs",
         "fetch_full_metadata": False,
         "playlist_chunk_size": 100,
+        "socket_timeout": 15,
+        "metadata_batch_size": 25,
+        "concurrent_fragments": 4,
+        "download_retries": 10,
+        "fragment_retries": 10,
+        "limit_rate": None,
+        "restrict_filenames": False,
+        "enable_download_archive": True,
+        "download_archive_path": "./db/downloaded.txt",
+        "ui_theme": DEFAULT_THEME,
     }
 
 

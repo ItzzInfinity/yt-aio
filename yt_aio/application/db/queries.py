@@ -19,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
-from .database_manager import _connect, _row_to_dict, _table_columns, init_db
+from .database_manager import _batched, _connect, _row_to_dict, _table_columns, init_db
 
 MAX_PAGE_SIZE = 2000
 
@@ -163,6 +163,21 @@ LIBRARY_SORTS: dict[str, str] = {
     "cached_at": "COALESCE(v.cached_at, '')",
     "is_full_metadata": "COALESCE(v.is_full_metadata, 0)",
     "download_count": "download_count",
+    # Sorted by the lead credit, the album, and the first playlist. A row shows several
+    # values in these columns but can only sort by one, and the lead artist is the one an
+    # operator means when they say "sort by artist".
+    "artists": (
+        "COALESCE((SELECT a.name FROM song_artists sa JOIN artists a ON a.artist_id = sa.artist_id "
+        "WHERE sa.video_id = v.video_id ORDER BY sa.position LIMIT 1), '') COLLATE NOCASE"
+    ),
+    "album": (
+        "COALESCE((SELECT al.title FROM songs s2 JOIN albums al ON al.album_id = s2.album_id "
+        "WHERE s2.video_id = v.video_id), '') COLLATE NOCASE"
+    ),
+    "playlists": (
+        "COALESCE((SELECT pl.name FROM song_playlists sp JOIN playlists pl ON pl.playlist_id = sp.playlist_id "
+        "WHERE sp.video_id = v.video_id LIMIT 1), '') COLLATE NOCASE"
+    ),
 }
 DEFAULT_LIBRARY_SORT = "cached_at"
 
@@ -181,6 +196,9 @@ def _library_filters(
     channel: str = "",
     min_duration: int | None = None,
     max_duration: int | None = None,
+    artist: str = "",
+    album: str = "",
+    playlist: str = "",
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -189,9 +207,11 @@ def _library_filters(
         needle = f"%{search.strip()}%"
         clauses.append(
             "(COALESCE(v.title, '') LIKE ? OR COALESCE(v.video_id, '') LIKE ? "
-            "OR COALESCE(v.channel_name, '') LIKE ? OR COALESCE(v.playlist_name, '') LIKE ?)"
+            "OR COALESCE(v.channel_name, '') LIKE ? OR COALESCE(v.playlist_name, '') LIKE ? "
+            "OR EXISTS (SELECT 1 FROM song_artists sa JOIN artists a ON a.artist_id = sa.artist_id "
+            "WHERE sa.video_id = v.video_id AND a.name LIKE ?))"
         )
-        params.extend([needle] * 4)
+        params.extend([needle] * 5)
 
     if channel.strip():
         # Substring rather than equality: the drop-down offers exact names, but an
@@ -208,6 +228,31 @@ def _library_filters(
     if max_duration:
         clauses.append("v.duration IS NOT NULL AND v.duration <= ?")
         params.append(int(max_duration))
+
+    # The music tables are reached by video_id, not by the cache row's integer id, which
+    # is the whole point of the new schema: an EXISTS over an indexed key rather than a
+    # LIKE over one free-text column, so a song credited to three artists matches all
+    # three (Docs/07_MUSIC_SCHEMA_PLAN.md).
+    if artist.strip():
+        clauses.append(
+            "EXISTS (SELECT 1 FROM song_artists sa JOIN artists a ON a.artist_id = sa.artist_id "
+            "WHERE sa.video_id = v.video_id AND a.name LIKE ?)"
+        )
+        params.append(f"%{artist.strip()}%")
+
+    if album.strip():
+        clauses.append(
+            "EXISTS (SELECT 1 FROM songs s2 JOIN albums al ON al.album_id = s2.album_id "
+            "WHERE s2.video_id = v.video_id AND al.title LIKE ?)"
+        )
+        params.append(f"%{album.strip()}%")
+
+    if playlist.strip():
+        clauses.append(
+            "EXISTS (SELECT 1 FROM song_playlists sp JOIN playlists pl ON pl.playlist_id = sp.playlist_id "
+            "WHERE sp.video_id = v.video_id AND pl.name LIKE ?)"
+        )
+        params.append(f"%{playlist.strip()}%")
 
     if source_id is not None:
         clauses.append("v.source_id = ?")
@@ -248,6 +293,86 @@ def fetch_channels(db_path: str, limit: int = 2000) -> list[str]:
         return [str(row["name"]) for row in rows]
 
 
+def _attach_music_detail(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
+    """Fill in artists, album and playlists for the page that was just read.
+
+    Three small queries against the page's video ids, not a join in the main statement.
+    SQLite here is 3.37, which has no ORDER BY inside GROUP_CONCAT, and the credit order
+    matters: the lead artist has to come first. Assembling in Python makes that order a
+    guarantee rather than an implementation detail.
+    """
+    video_ids = [str(row.get("video_id") or "") for row in rows if row.get("video_id")]
+    if not video_ids:
+        return
+
+    artists: dict[str, list[tuple[int, str]]] = {}
+    albums: dict[str, str] = {}
+    playlists: dict[str, list[str]] = {}
+
+    for batch in _batched(video_ids):
+        marks = ", ".join("?" for _ in batch)
+        for row in conn.execute(
+            f"""
+            SELECT sa.video_id, sa.position, a.name
+            FROM song_artists sa JOIN artists a ON a.artist_id = sa.artist_id
+            WHERE sa.video_id IN ({marks})
+            """,
+            batch,
+        ):
+            artists.setdefault(str(row["video_id"]), []).append((int(row["position"] or 0), str(row["name"])))
+
+        for row in conn.execute(
+            f"""
+            SELECT s.video_id, al.title
+            FROM songs s JOIN albums al ON al.album_id = s.album_id
+            WHERE s.video_id IN ({marks})
+            """,
+            batch,
+        ):
+            albums[str(row["video_id"])] = str(row["title"])
+
+        for row in conn.execute(
+            f"""
+            SELECT sp.video_id, pl.name
+            FROM song_playlists sp JOIN playlists pl ON pl.playlist_id = sp.playlist_id
+            WHERE sp.video_id IN ({marks})
+            """,
+            batch,
+        ):
+            playlists.setdefault(str(row["video_id"]), []).append(str(row["name"]))
+
+    for row in rows:
+        video_id = str(row.get("video_id") or "")
+        credited = sorted(artists.get(video_id, []), key=lambda pair: pair[0])
+        row["artists"] = ", ".join(name for _, name in credited)
+        row["album"] = albums.get(video_id, "")
+        row["playlists"] = ", ".join(playlists.get(video_id, []))
+
+
+def fetch_artists(db_path: str, limit: int = 2000) -> list[str]:
+    """Every credited artist name, for the filter drop-down."""
+    return _fetch_names(db_path, "SELECT name FROM artists WHERE name <> '' ORDER BY name COLLATE NOCASE LIMIT ?", limit)
+
+
+def fetch_albums(db_path: str, limit: int = 2000) -> list[str]:
+    return _fetch_names(db_path, "SELECT title FROM albums WHERE title <> '' ORDER BY title COLLATE NOCASE LIMIT ?", limit)
+
+
+def fetch_playlists(db_path: str, limit: int = 2000) -> list[str]:
+    return _fetch_names(db_path, "SELECT name FROM playlists WHERE name <> '' ORDER BY name COLLATE NOCASE LIMIT ?", limit)
+
+
+def _fetch_names(db_path: str, statement: str, limit: int) -> list[str]:
+    """A single-column lookup list. A missing table means an empty drop-down, not a crash."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        try:
+            return [str(row[0]) for row in conn.execute(statement, (int(limit),))]
+        except sqlite3.OperationalError:
+            return []
+
+
+
 def fetch_videos(
     db_path: str,
     *,
@@ -257,6 +382,9 @@ def fetch_videos(
     channel: str = "",
     min_duration: int | None = None,
     max_duration: int | None = None,
+    artist: str = "",
+    album: str = "",
+    playlist: str = "",
     sort_key: str = DEFAULT_LIBRARY_SORT,
     descending: bool = True,
     limit: int = 200,
@@ -276,7 +404,8 @@ def fetch_videos(
             return [], 0
 
         where, params = _library_filters(
-            search, source_id, completeness, channel, min_duration, max_duration
+            search, source_id, completeness, channel, min_duration, max_duration,
+            artist, album, playlist,
         )
         total = conn.execute(
             f"SELECT COUNT(*) AS n FROM youtube_video_information v {where}", params
@@ -296,7 +425,9 @@ def fetch_videos(
             """,
             [*params, limit, offset],
         ).fetchall()
-        return [_row_to_dict(row) for row in rows], int(total)
+        page = [_row_to_dict(row) for row in rows]
+        _attach_music_detail(conn, page)
+        return page, int(total)
 
 
 def delete_videos(db_path: str, row_ids: list[int]) -> int:
@@ -335,13 +466,49 @@ def database_stats(db_path: str) -> dict[str, int]:
     return counts
 
 
+def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
+    """One ImportedItem, as a dictionary, turned into an upsert_songs payload.
+
+    A backup knows things a listing never will: every credited artist, the album, which
+    playlists a song sits in, how often it was played. That is the whole reason the music
+    tables exist, so all of it is passed through rather than flattened into one column.
+    """
+    collections = row.get("collections") or []
+    credited = row.get("artists") or row.get("channel_name") or ""
+    payload: dict[str, Any] = {
+        "video_id": str(row.get("video_id") or "").strip(),
+        "title": row.get("title") or "",
+        "duration": row.get("duration_seconds"),
+        "thumbnail_url": row.get("thumbnail_url"),
+        "video_url": row.get("url"),
+        "upload_date": row.get("upload_date"),
+        "album": row.get("album") or "",
+        "bitrate_label": row.get("bitrate_label"),
+        "play_count": row.get("play_count") or 0,
+        "liked": "Liked" in collections,
+        "in_library": "Library" in collections,
+        "downloaded": "Downloaded" in collections,
+        "origin": row.get("origin") or "import",
+    }
+    if credited:
+        payload["artists"] = credited
+    if row.get("playlists"):
+        payload["playlists"] = row["playlists"]
+    return payload
+
+
+
 def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: str) -> tuple[int, int]:
     """Merge imported items into the cache under their own source row.
 
     Returns (written, skipped). Rows already present keep their richer stored metadata:
     an import must never overwrite a full yt-dlp record with a sparser backup entry.
+
+    Writes to both layers. youtube_video_information is the flat cache the older views
+    read; the music tables keep the artists, album and playlists that the flat row has
+    nowhere to put (Docs/07_MUSIC_SCHEMA_PLAN.md).
     """
-    from .database_manager import upsert_source
+    from .database_manager import upsert_songs, upsert_source
     from ..utils.shared import now_string
 
     if not rows:
@@ -402,4 +569,6 @@ def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: st
                 ),
             )
             written += 1
+
+    upsert_songs(db_path, [_song_payload_from_import(row) for row in rows if row.get("video_id")])
     return written, skipped

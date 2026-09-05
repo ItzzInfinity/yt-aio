@@ -375,7 +375,7 @@ def create_threading_diagram():
     draw.text((850, 175), "ThreadPoolExecutor (Python)", font=font_tiny, fill=COLOR_TEXT_MUTED)
     
     pool_elements = [
-        ((850, 220, 1130, 340), "Metadata Workers (max=4)\n• Parallel fetch_video_metadata()\n• Fetches multiple URLs/IDs\n• Fast cache backfill writes", COLOR_EXTERNAL),
+        ((850, 220, 1130, 340), "Metadata Workers (max=4)\n• Parallel fetch_metadata_batch()\n• One yt-dlp per batch of URLs\n• Fast cache backfill writes", COLOR_EXTERNAL),
         ((850, 380, 1130, 520), "Download Workers (max=CPU-2)\n• Parallel download_one()\n• Captures subprocess pipes\n• Saves stream files locally", COLOR_EXTERNAL),
         ((850, 560, 1130, 680), "Mutex Lock System:\n• Protects downloads logs\n• Thread-safe sqlite WAL writes", COLOR_DB),
     ]

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenTune vs ViTune — Schema Comparison</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0a0c10; --surface: #12161e; --surface2: #1a202e; --border: #252d3e;
+    --primary: #00e5ff; --primary-dim: rgba(0,229,255,0.12);
+    --ot: #6bcb77; --ot-dim: rgba(107,203,119,0.12);
+    --vt: #c77dff; --vt-dim: rgba(199,125,255,0.12);
+    --warn: #ff9a3c; --good: #6bcb77; --bad: #ff6b6b; --accent2: #ffd93d;
+    --text: #e0e8f0; --muted: #5a6a82;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  header.page { padding: 28px 40px 20px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0d1119 0%, transparent 100%); }
+  header.page h1 { font-family: 'Syne', system-ui, sans-serif; font-size: 1.6rem; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
+  header.page h1 .ot { color: var(--ot); } header.page h1 .vt { color: var(--vt); }
+  .sub { color: var(--muted); font-size: 0.78rem; margin-top: 8px; max-width: 90ch; line-height: 1.7; }
+  main { padding: 30px 40px 70px; max-width: 1300px; margin: 0 auto; }
+  section { margin-bottom: 48px; }
+  h2 { font-family: 'Syne', system-ui, sans-serif; font-size: 1.15rem; font-weight: 700; color: #fff; margin-bottom: 8px; }
+  h2::before { content: '// '; color: var(--primary); }
+  .lede { color: var(--muted); font-size: 0.82rem; line-height: 1.75; margin-bottom: 20px; max-width: 84ch; }
+  .verdict-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .verdict { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .verdict.ot { border-color: rgba(107,203,119,0.45); }
+  .verdict.vt { border-color: rgba(199,125,255,0.45); }
+  .verdict h3 { font-size: 0.86rem; color: #fff; margin-bottom: 8px; font-family: 'Syne', system-ui, sans-serif; }
+  .verdict p { font-size: 0.76rem; line-height: 1.75; color: var(--muted); }
+  .verdict .who { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 2px 8px; border-radius: 20px; margin-bottom: 9px; border: 1px solid; }
+  .who.ot { color: var(--ot); border-color: rgba(107,203,119,0.4); background: var(--ot-dim); }
+  .who.vt { color: var(--vt); border-color: rgba(199,125,255,0.4); background: var(--vt-dim); }
+  .who.tie { color: var(--muted); border-color: var(--border); background: var(--surface2); }
+  .wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; min-width: 780px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--primary);
+    background: var(--surface2); position: sticky; top: 0; }
+  thead th.ot { color: var(--ot); } thead th.vt { color: var(--vt); }
+  tbody tr:hover { background: rgba(255,255,255,0.025); }
+  td.num { text-align: right; color: var(--accent2); }
+  td.aspect { color: #fff; font-weight: 600; white-space: nowrap; }
+  code { background: var(--surface2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 5px; font-size: 0.92em; color: var(--primary); }
+  .yes { color: var(--good); } .no { color: var(--bad); } .part { color: var(--warn); }
+  .note { background: var(--surface); border-left: 3px solid var(--warn); border-radius: 0 10px 10px 0;
+    padding: 14px 18px; font-size: 0.77rem; line-height: 1.75; color: var(--muted); margin-top: 18px; }
+  .note strong { color: var(--text); }
+  footer { padding: 22px 40px 46px; color: var(--muted); font-size: 0.7rem; border-top: 1px solid var(--border); line-height: 1.8; }
+  footer a { color: var(--primary); }
+  @media (max-width: 700px) { header.page, main, footer { padding-left: 18px; padding-right: 18px; } }
+</style>
+</head>
+<body>
+
+<header class="page">
+  <h1><span class="ot">OpenTune</span> vs <span class="vt">ViTune</span> &#183; schema comparison</h1>
+  <div class="sub">
+    Both are Android music apps that keep their library in a Room database and back it up
+    as a SQLite file. Both are keyed on the YouTube video id, which is why either can be
+    merged into YT AIO. Below is what each one actually records, measured on
+    <code>OpenTune_20260326213635.backup</code> (9583 songs) and
+    <code>ViTune_backup_20250831122626.db</code> (5085 songs), and what that means for an
+    importer reading them.
+  </div>
+</header>
+
+<main>
+
+<section>
+  <h2>The short answer</h2>
+  <p class="lede">
+    OpenTune records more about a song. ViTune records more about listening. Neither is a
+    superset of the other, so an importer wants both readers rather than one.
+  </p>
+  <div class="verdict-grid">
+
+    <article class="verdict ot">
+      <span class="who ot">OpenTune wins</span>
+      <h3>Artist credits are complete</h3>
+      <p>
+        15276 credits over 9583 songs, and <code>song_artist_map</code> carries a
+        <code>position</code>, so the lead artist is known. ViTune has 6094 credits over
+        5085 songs, no position column, and a fifth of its songs have no credit row at
+        all &#8212; only the free-text <code>artistsText</code>.
+      </p>
+    </article>
+
+    <article class="verdict ot">
+      <span class="who ot">OpenTune wins</span>
+      <h3>It knows what you saved and downloaded</h3>
+      <p>
+        <code>song.inLibrary</code> and <code>song.dateDownload</code> separate the songs
+        you chose from the thousands the player merely cached. ViTune has neither, so an
+        importer cannot honestly mark anything as downloaded, only as liked, played or
+        filed.
+      </p>
+    </article>
+
+    <article class="verdict vt">
+      <span class="who vt">ViTune wins</span>
+      <h3>Album coverage is far better</h3>
+      <p>
+        2712 albums mapped to 3978 songs, against OpenTune's 29 albums over 286 songs on a
+        library three times the size. OpenTune also denormalises <code>albumName</code>
+        onto the song, which is how it stays usable, but the album table itself is nearly
+        empty.
+      </p>
+    </article>
+
+    <article class="verdict vt">
+      <span class="who vt">ViTune wins</span>
+      <h3>Play history is real history</h3>
+      <p>
+        18394 <code>Event</code> rows against OpenTune's 1864, on a smaller library. Both
+        store one row per play with a timestamp and a duration, so both give a true play
+        count; ViTune simply keeps far more of it.
+      </p>
+    </article>
+
+    <article class="verdict vt">
+      <span class="who vt">ViTune wins</span>
+      <h3>Lyrics, and a cleaner cache table</h3>
+      <p>
+        244 songs with lyrics against OpenTune's 26, and ViTune splits them into
+        <code>fixed</code> and time-synced <code>synced</code> where OpenTune stores one
+        blob. <code>Format</code> is keyed on <code>songId</code>, which states the
+        one-to-one relationship the schema actually has.
+      </p>
+    </article>
+
+    <article class="verdict">
+      <span class="who tie">Even</span>
+      <h3>Shape, keys and the junctions</h3>
+      <p>
+        Same idea throughout: a song table keyed on the video id, three junctions to
+        artists, albums and playlists, and detail tables hanging off the song. An importer
+        written for one is structurally the same as an importer for the other.
+      </p>
+    </article>
+
+  </div>
+</section>
+
+<section>
+  <h2>Table for table</h2>
+  <p class="lede">
+    Row counts are from the two backups named above. A dash means the format has no
+    equivalent table.
+  </p>
+  <div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>What it holds</th>
+        <th class="ot">OpenTune table</th><th class="ot" style="text-align:right">Rows</th>
+        <th class="vt">ViTune table</th><th class="vt" style="text-align:right">Rows</th>
+        <th>What differs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="aspect">Songs</td>
+        <td><code>song</code></td><td class="num">9,583</td>
+        <td><code>Song</code></td><td class="num">5,085</td>
+        <td>OpenTune stores <code>duration</code> as seconds and adds <code>inLibrary</code>, <code>dateDownload</code> and <code>albumName</code>. ViTune stores <code>durationText</code> as "3:35", plus <code>artistsText</code>, <code>blacklisted</code> and <code>explicit</code>.</td></tr>
+      <tr><td class="aspect">Artists</td>
+        <td><code>artist</code></td><td class="num">4,958</td>
+        <td><code>Artist</code></td><td class="num">2,000</td>
+        <td>OpenTune keeps <code>songCount</code> and a separate <code>channelId</code>. Both key on the YouTube browse id.</td></tr>
+      <tr><td class="aspect">Song &#8594; artist</td>
+        <td><code>song_artist_map</code></td><td class="num">15,276</td>
+        <td><code>SongArtistMap</code></td><td class="num">6,094</td>
+        <td><span class="yes">OpenTune has <code>position</code></span>, so credit order survives. <span class="no">ViTune has no position</span> and no row at all for many songs.</td></tr>
+      <tr><td class="aspect">Albums</td>
+        <td><code>album</code></td><td class="num">29</td>
+        <td><code>Album</code></td><td class="num">2,712</td>
+        <td>ViTune adds <code>authorsText</code>, <code>description</code> and <code>shareUrl</code>. OpenTune adds <code>songCount</code>, <code>duration</code> and <code>themeColor</code>.</td></tr>
+      <tr><td class="aspect">Song &#8594; album</td>
+        <td><code>song_album_map</code></td><td class="num">286</td>
+        <td><code>SongAlbumMap</code></td><td class="num">3,978</td>
+        <td>Same shape; OpenTune calls the track number <code>index</code>, ViTune calls it <code>position</code>.</td></tr>
+      <tr><td class="aspect">Album &#8594; artist</td>
+        <td><code>album_artist_map</code></td><td class="num">45</td>
+        <td>&#8212;</td><td class="num">&#8212;</td>
+        <td><span class="yes">Only OpenTune</span> links an album to artists. ViTune keeps the credit as text in <code>Album.authorsText</code>.</td></tr>
+      <tr><td class="aspect">Playlists</td>
+        <td><code>playlist</code></td><td class="num">2</td>
+        <td><code>Playlist</code></td><td class="num">4</td>
+        <td>OpenTune stores far more per playlist: <code>isEditable</code>, endpoint parameters, a remote song count.</td></tr>
+      <tr><td class="aspect">Song &#8594; playlist</td>
+        <td><code>playlist_song_map</code></td><td class="num">57</td>
+        <td><code>SongPlaylistMap</code></td><td class="num">330</td>
+        <td>Both carry <code>position</code>. ViTune adds a <code>SortedSongPlaylistMap</code> view over it.</td></tr>
+      <tr><td class="aspect">Cached stream</td>
+        <td><code>format</code></td><td class="num">1,484</td>
+        <td><code>Format</code></td><td class="num">4,474</td>
+        <td>OpenTune adds <code>codecs</code>, <code>sampleRate</code> and <code>playbackUrl</code>. <span class="yes">ViTune keys on <code>songId</code></span>, which makes the one-to-one relationship explicit.</td></tr>
+      <tr><td class="aspect">Play events</td>
+        <td><code>event</code></td><td class="num">1,864</td>
+        <td><code>Event</code></td><td class="num">18,394</td>
+        <td>Identical four columns. ViTune has ten times as many on a smaller library.</td></tr>
+      <tr><td class="aspect">Lyrics</td>
+        <td><code>lyrics</code></td><td class="num">26</td>
+        <td><code>Lyrics</code></td><td class="num">244</td>
+        <td><span class="yes">ViTune separates</span> <code>fixed</code> from time-synced <code>synced</code>; OpenTune stores one <code>lyrics</code> column.</td></tr>
+      <tr><td class="aspect">Recommendations</td>
+        <td><code>related_song_map</code></td><td class="num">37,360</td>
+        <td>&#8212;</td><td class="num">&#8212;</td>
+        <td><span class="part">The trap.</span> Largest table in an OpenTune backup and not a library at all. A table-by-table scan imports all of it.</td></tr>
+      <tr><td class="aspect">Search history</td>
+        <td><code>search_history</code></td><td class="num">165</td>
+        <td><code>SearchQuery</code></td><td class="num">474</td>
+        <td>App state. Neither should be imported.</td></tr>
+      <tr><td class="aspect">Playback queue</td>
+        <td>&#8212;</td><td class="num">&#8212;</td>
+        <td><code>QueuedMediaItem</code></td><td class="num">1</td>
+        <td>A serialised blob. Not readable as music, and not worth reading.</td></tr>
+      <tr><td class="aspect">Play count rollup</td>
+        <td><code>playCount</code></td><td class="num">0</td>
+        <td>&#8212;</td><td class="num">&#8212;</td>
+        <td>Present in the OpenTune schema and empty in practice. Use <code>event</code>.</td></tr>
+      <tr><td class="aspect">Piped account</td>
+        <td>&#8212;</td><td class="num">&#8212;</td>
+        <td><code>PipedSession</code></td><td class="num">0</td>
+        <td>Holds a token. An importer must never read it, let alone log it.</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>Feature by feature</h2>
+  <div class="wrap">
+  <table>
+    <thead><tr><th>Can you get&#8230;</th><th class="ot">OpenTune</th><th class="vt">ViTune</th><th>Consequence for the importer</th></tr></thead>
+    <tbody>
+      <tr><td class="aspect">Every credited artist</td>
+        <td class="yes">Yes, through the junction</td>
+        <td class="part">Partly &#8212; junction plus text</td>
+        <td>The ViTune reader has to merge <code>artistsText</code> with the junction, taking order and completeness from the text and canonical spelling from the table.</td></tr>
+      <tr><td class="aspect">Credit order</td>
+        <td class="yes">Yes, <code>position</code></td>
+        <td class="part">Only from the text column</td>
+        <td>Lead artist is reliable in OpenTune. In ViTune it is whatever <code>artistsText</code> lists first.</td></tr>
+      <tr><td class="aspect">Album per song</td>
+        <td class="part">Sparse table, but <code>albumName</code> saves it</td>
+        <td class="yes">Yes, well populated</td>
+        <td>Read the denormalised name first in OpenTune and fall back to the junction; in ViTune the junction is the better source.</td></tr>
+      <tr><td class="aspect">Playlist membership</td>
+        <td class="yes">Yes, ordered</td>
+        <td class="yes">Yes, ordered</td>
+        <td>Identical handling. Both give a running order worth keeping.</td></tr>
+      <tr><td class="aspect">Liked</td>
+        <td class="yes"><code>liked</code> and <code>likedDate</code></td>
+        <td class="yes"><code>likedAt</code>, null when not liked</td>
+        <td>Equivalent.</td></tr>
+      <tr><td class="aspect">In library</td>
+        <td class="yes"><code>inLibrary</code></td>
+        <td class="no">No column</td>
+        <td>A ViTune import cannot distinguish a saved song from a cached one except by liked, played or filed.</td></tr>
+      <tr><td class="aspect">Downloaded</td>
+        <td class="yes"><code>dateDownload</code></td>
+        <td class="no">No column</td>
+        <td>Nothing from a ViTune backup is marked Downloaded. Guessing from a cached <code>Format</code> row would be wrong, and a wrong "already have it" stops a download you wanted.</td></tr>
+      <tr><td class="aspect">Play count</td>
+        <td class="yes">Count <code>event</code> rows</td>
+        <td class="yes">Count <code>Event</code> rows</td>
+        <td>Same query. ViTune also sums it into <code>totalPlayTimeMs</code>.</td></tr>
+      <tr><td class="aspect">Duration</td>
+        <td class="yes">Seconds, but <code>-1</code> means unknown</td>
+        <td class="yes">The string "3:35"</td>
+        <td>Both need coercion. OpenTune's <code>-1</code> covers 8050 of its 9583 songs and must become "unknown", not a negative length.</td></tr>
+      <tr><td class="aspect">Release date</td>
+        <td class="yes"><code>date</code>, or <code>year</code></td>
+        <td class="no">Not on the song</td>
+        <td>A ViTune import has no upload date. It has to come from a later metadata fetch.</td></tr>
+      <tr><td class="aspect">Bitrate</td>
+        <td class="yes"><code>bitrate</code> and <code>codecs</code></td>
+        <td class="yes"><code>bitrate</code> and <code>mimeType</code></td>
+        <td>Same information; the container has to be taken off the mime subtype in ViTune.</td></tr>
+      <tr><td class="aspect">On-device files</td>
+        <td class="no">Not stored</td>
+        <td class="part">Yes, as <code>local:</code> ids</td>
+        <td>42 rows in the real backup. They have no video id and nothing to download, so the reader skips them.</td></tr>
+      <tr><td class="aspect">Blacklisted songs</td>
+        <td class="no">No column</td>
+        <td class="yes"><code>blacklisted</code></td>
+        <td>The ViTune reader honours it: 14 songs excluded. Importing something the operator hid would be rude.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <strong>The one that catches everybody.</strong> A generic "scan every table for
+    something that looks like a video id" importer reads
+    <code>related_song_map</code> in an OpenTune backup and <code>Event</code> in a ViTune
+    one. Those are the two largest tables in each file and neither contains a song you
+    chose. Both readers in this project therefore produce rows from the song table alone,
+    and use every other table only to describe those rows.
+  </div>
+</section>
+
+<section>
+  <h2>How this maps onto YT AIO</h2>
+  <p class="lede">
+    The music schema in <code>Docs/07_MUSIC_SCHEMA_PLAN.md</code> is deliberately the
+    union of what both formats know, so nothing is lost on the way in from either.
+  </p>
+  <div class="wrap">
+  <table>
+    <thead><tr><th>YT AIO</th><th class="ot">From OpenTune</th><th class="vt">From ViTune</th></tr></thead>
+    <tbody>
+      <tr><td class="aspect"><code>songs</code></td><td><code>song</code></td><td><code>Song</code>, minus <code>local:</code> and blacklisted rows</td></tr>
+      <tr><td class="aspect"><code>artists</code>, <code>song_artists</code></td><td><code>artist</code> + <code>song_artist_map</code>, ordered by <code>position</code></td><td><code>Artist</code> + <code>SongArtistMap</code>, ordered by <code>artistsText</code></td></tr>
+      <tr><td class="aspect"><code>albums</code>, <code>song_albums</code></td><td><code>song.albumName</code>, then <code>song_album_map</code></td><td><code>SongAlbumMap</code> + <code>Album</code></td></tr>
+      <tr><td class="aspect"><code>playlists</code>, <code>song_playlists</code></td><td><code>playlist_song_map</code> + <code>playlist</code></td><td><code>SongPlaylistMap</code> + <code>Playlist</code></td></tr>
+      <tr><td class="aspect"><code>songs.play_count</code></td><td>count of <code>event</code></td><td>count of <code>Event</code></td></tr>
+      <tr><td class="aspect"><code>songs.bitrate_label</code></td><td><code>format.bitrate</code> + <code>codecs</code></td><td><code>Format.bitrate</code> + <code>mimeType</code></td></tr>
+      <tr><td class="aspect"><code>songs.liked</code></td><td><code>song.liked</code></td><td><code>Song.likedAt</code></td></tr>
+      <tr><td class="aspect"><code>songs.in_library</code></td><td><code>song.inLibrary</code></td><td class="no">nothing to read</td></tr>
+      <tr><td class="aspect"><code>songs.downloaded</code></td><td><code>song.dateDownload</code></td><td class="no">nothing to read</td></tr>
+      <tr><td class="aspect"><code>songs.upload_date</code></td><td><code>song.date</code> or <code>year</code></td><td class="no">nothing to read</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  Measured on <code>OpenTune_20260326213635.backup</code> and <code>ViTune_backup_20250831122626.db</code>.<br>
+  Schemas: <code>Docs/song_db_erd.html</code> (OpenTune) and <code>Docs/vitune_db_erd.html</code> (ViTune, generated by <code>Docs/generate_vitune_erd.py</code>).<br>
+  Readers: <code>yt_aio/application/features/importer/opentune.py</code> and <code>yt_aio/application/features/importer/vitune.py</code>.
+</footer>
+
+</body>
+</html>
