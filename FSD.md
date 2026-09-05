@@ -1,7 +1,38 @@
 <!-- Functional Specification Document -->
 # 1. Project name: YT AIO
 
-## Current state — 2026-09-05 (session 4) — the 1.8.3 batch: final schema, Local Scan writes, Library delete
+## Current state — 2026-09-05 (session 5) — liked songs from OpenTune and ViTune
+
+- **Current phase:** 1.12 complete. Liked is carried, filterable and overridden by a re-import.
+- **Last completed task:** N4, the Library Liked column and filter.
+- **Next task:** Nothing pending. Re-import your OpenTune and ViTune backups from the Import tab to populate the flag; the live database has the column but no likes yet, because nothing has been imported since it came back.
+
+### Session summary
+1. **N1.** `songs.liked` restored, with `_ensure_column` for a database written while it was gone. `play_count` stays dropped.
+2. **N2.** `liked` overrides instead of merging, and only when the payload names it. It sits outside the conflict clause and is settled by a follow-up UPDATE, which is what lets a 1 become a 0.
+3. **N3.** The importer always sends the flag, and reports likes added and removed separately.
+4. **N4.** A Liked column, `Liked` and `Not liked` in the Show drop-down, and a sort key, all in SQL.
+
+**Gotchas learned this session:**
+- **`MAX` in an upsert makes a flag one-way, which is right for one field and wrong for another.** `downloaded` should never go back to 0 because a file on disk does not stop existing when a backup is silent about it. `liked` must be able to, because a backup is the only authority on it. Same statement, opposite rules, and the reason belongs in a comment beside each.
+- **SQLite cannot make one `ON CONFLICT` clause conditional per row.** Wanting "override when the source names it, leave alone when silent" from a single statement needs a NULL sentinel, which a `NOT NULL` column forbids. Leaving the column out of the conflict clause and settling it with a follow-up UPDATE is two statements and no cleverness.
+- **Override across two backups is not what it sounds like.** Importing OpenTune after ViTune removed 334 likes, because every song the two share takes the later file's answer. That is exactly what was asked for, but a single "N flags changed" number hides it, so added and removed are counted apart.
+- **A restored column starts empty.** The live database has `liked` back and zero likes in it, because the flag only arrives with an import. Adding a column is not the same as having the data.
+
+### Partially done
+- none
+
+### Blocked
+- none
+
+### Next step (exact)
+Open the Import tab, load `ViTune_backup_20250831122626.db`, tick everything and press the merge button. Read the log line: it should report the number liked in the backup, how many were newly liked and how many were unliked. Then open the Library tab and set Show to `Liked`. Repeat with an OpenTune backup and expect the count to move, because the second import overrides shared songs.
+
+### Assumptions
+- Liked is read-only in this application. Nothing here lets you like a song; the flag only ever arrives from a backup, which is why a re-import is treated as the authority.
+- `play_count` stays out. Only `liked` was asked for.
+
+## Previous state — 2026-09-05 (session 4) — the 1.8.3 batch: final schema, Local Scan writes, Library delete
 
 - **Current phase:** 1.11 roadmap complete. All four requests in FSD 1.8.3 are closed.
 - **Last completed task:** L1, the Library delete button.
@@ -376,7 +407,7 @@ Run `python3 -m pip install -U yt-dlp`, sign in to YouTube in Brave once, then s
 
   - **Not part of the request, but you should know**: every download on this machine fails with `HTTP Error 403: Forbidden`, including the old command with none of these changes applied. The installed yt-dlp is version 2026.03.17, which it reports as more than 90 days stale. Run `python3 -m pip install -U yt-dlp` before trusting a download test.
 ### 1.8.3. Combine the best of opentune and vitune database which will be my final database.
-- Read `./Docs/opentune_vs_vitune.html` file and make a final database `songs.play_count` & `songs.liked` I dont need them - **Done**. Both columns are gone from the schema, from every write path, and from any database that already had them, through a migration guarded so it runs once and is safe to re-run. They were the right things to drop: this is a downloader, so nothing here ever plays a song or likes one, and the columns could only ever hold whatever a backup happened to say on the day it was read. The parsers still read a backup's plays and likes, because that is how the Import grid decides the Collection label for the file you are looking at. Verified by importing your real 5029-song ViTune backup into a migrated copy: 8519 songs, 11610 credits, artist filter unchanged.
+- Read `./Docs/opentune_vs_vitune.html` file and make a final database `songs.play_count` & `songs.liked` I dont need them - **Done**. Both columns are gone from the schema, from every write path, and from any database that already had them, through a migration guarded so it runs once and is safe to re-run. **Reopened** for `liked` in 1.12: you wanted it back so the Library can filter on it, and it is now carried with override semantics, so a re-import is the authority. `play_count` stays dropped and that part still holds, because a play count is a running total that is stale the moment it is read where a like is a decision. The parsers still read a backup's plays and likes, because that is how the Import grid decides the Collection label for the file you are looking at. Verified by importing your real 5029-song ViTune backup into a migrated copy: 8519 songs, 11610 credits, artist filter unchanged.
 - in local scan tab I want a button `ADD TO DATABASE` which will add the new audio files to the database (if they have video id) and also update the existing audio files in the database if they have any changes in the metadata. And check if already they exist but not flagged as downloaded then update the flag to downloaded. - **Done**. The button acts on everything the filters currently match, not the page on screen, because this grid filters rather than selects, and it says how many before it does anything. One judgement call worth knowing: a file fills in what a song is missing but does not overwrite what it already has, because a yt-dlp title is better evidence than an ID3 tag from an unknown ripper, and `local_files` already keeps the file's own values refreshed on every scan for comparison. Tested on 92 of your real downloads and on a folder built for the purpose: an unflagged video went to downloaded with no duplicate row, and a second press added nothing.
 - If video id is not present then add them in a different table so they will be logged but not interfere with direct access to the query and give false positive for the existing audio files in the database. - **Done** as `local_only_tracks`, keyed on the file path. Exactly the reasoning you gave: a song in `songs` has a YouTube identity that can be looked up and re-fetched, a file with only an ID3 tag has none, and mixing them would make a title collision read as a match it is not. Three untagged files in the test folder landed there with none reaching `songs`.
 - in `Library` Tab until I click select all on this page it wont allow me to delete the selected audio files from the database. - **Fixed**. Root cause: nothing watched the individual tick boxes, so the only code path that ever enabled `Delete selected` was the select-all checkbox. Deleting one row meant selecting the whole page and unticking the rest. The grid's own change signal now drives the button. Two traps on the way: filling the grid fires that signal for every cell and none of those are selections, so `_render` blocks it; and declaring the slot as taking `object` makes Qt refuse the connection outright, because the signal carries a table item.
@@ -463,6 +494,22 @@ self-check, tick it with the date and a one-line summary.
 
 ### L. Library
 - [x] L1 — Enable `Delete selected` when rows are ticked one at a time, not only by select-all — done 2026-09-05; nothing watched the individual tick boxes, so `setEnabled` was only ever reached through the select-all checkbox and deleting one row meant selecting the whole page and unticking the rest. The grid's `itemChanged` now drives it, filtered to the tick box column. Two details made it work: `_render` blocks the signal while it fills the grid, because setting a cell fires `itemChanged` for every cell and none of those are selections, and the slot carries no `pyqtSlot(object)` decorator, which declares a signature Qt refuses to connect to `itemChanged(QTableWidgetItem*)`. Verified through all seven states: load, one tick, two ticks, untick, select all, clear, and reload.
+
+## 1.12. Roadmap — liked songs, from FSD 1.8.3 reopened
+
+`songs.liked` was dropped in 1.11 and is wanted back: OpenTune and ViTune both record
+which songs were liked, and that should be filterable in the Library. `play_count` stays
+dropped, which was not part of the reversal.
+
+The important detail is that a re-import must **override** the flag rather than merge it.
+A song unliked on the phone has to come back unliked here, so `liked` cannot use the
+`MAX` rule that `downloaded` uses. Those two differ for a good reason: a backup is the
+only authority on what is liked, and no authority at all on what is on this disk.
+
+- [x] N1 — Restore `songs.liked`, re-adding the column to databases that already dropped it — done 2026-09-05; back in the `init_db` script and off the retired list, with an `_ensure_column` call because a database written between 1.11 and 1.12 has no such column and `CREATE TABLE IF NOT EXISTS` will not add one. `play_count` stays retired: a like is a decision worth keeping, a play count is a running total that is stale the moment it is read. Verified from both older shapes: a database with no `liked` gained it at 0 with its 21923 songs and 8858 downloaded flags intact, and one that still had `play_count` kept all 498 of its liked rows while losing only the count.
+- [x] N2 — `upsert_songs` overrides `liked` when a payload names it and leaves it alone when silent — done 2026-09-05; `liked` is deliberately absent from the conflict clause and settled by a follow-up UPDATE, which is what lets a 1 become a 0. `MAX`, the rule `downloaded` uses, would make the flag one-way and unliking impossible. The two differ because a backup is the sole authority on what is liked and no authority at all on what is on this disk. Verified across eight cases: liking, unliking, re-liking, a silent listing leaving it alone, `downloaded` still refusing to go back to 0, and a new row from a silent source starting at 0.
+- [x] N3 — The Import path sends `liked`, and says how many flags it changed — done 2026-09-05; the key is always present, never conditional, so a song a backup does not list as liked arrives as an explicit False and overrides what an older import left. Added and removed are counted apart rather than as one number, because overriding means the last backup wins for every song two backups share. On the real files: ViTune contributed 686 likes, then OpenTune added 67 and removed 334, leaving 419. Re-importing the same backup changed nothing, and unliking one song on the phone propagated as a single removal.
+- [x] N4 — Library: a Liked column and a Liked filter, both resolved in SQL — done 2026-09-05; a Liked column showing a heart, `Liked` and `Not liked` in the Show drop-down, and a sort key, all as correlated subqueries against `songs` so paging stays correct. Measured on 21980 rows: the filter returns 419 in 0.10s and the sort runs in 0.04s, and it composes with the artist filter, giving 23 liked songs credited to Arijit Singh. Checked in the running application.
 
 ## Self-check
 

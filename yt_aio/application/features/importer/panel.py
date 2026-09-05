@@ -548,9 +548,13 @@ class ImportPanel(QWidget):
         self._log("INFO", f"Adding {len(rows)} item(s) to {db_path}")
 
         def job(log, _token):
-            written, skipped = import_video_rows(db_path, rows, label)
+            written, skipped, likes = import_video_rows(db_path, rows, label)
             log(f"[{_stamp()}] [INFO] {written} row(s) written, {skipped} skipped.")
-            return written, skipped
+            log(
+                f"[{_stamp()}] [INFO] Liked: {likes['liked']} of these are liked in this backup. "
+                f"{likes['liked_added']} newly liked, {likes['liked_removed']} unliked."
+            )
+            return written, skipped, likes
 
         self._parse_worker = CallableThread(job, self._cancel_token, done_message="Import finished.")
         self._attach(self._parse_worker)
@@ -559,11 +563,14 @@ class ImportPanel(QWidget):
 
     @pyqtSlot(object)
     def _on_merged(self, result) -> None:
-        written, skipped = result
+        written, skipped, likes = result
         self._log(
             "INFO",
             f"Added {written} row(s) to the database under the source '{self._source_label or 'backup'}'. "
-            f"{skipped} row(s) had no video id. Open the Library tab to see them.",
+            f"{skipped} row(s) had no video id. {likes['liked']} are liked in this backup: "
+            f"{likes['liked_added']} newly liked and {likes['liked_removed']} unliked. A backup "
+            f"overrides the liked flag rather than merging, so importing a second backup unlikes "
+            f"any shared song it does not list. Filter on Liked in the Library tab.",
         )
 
     @pyqtSlot()

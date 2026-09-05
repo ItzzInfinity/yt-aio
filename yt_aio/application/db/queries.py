@@ -178,6 +178,7 @@ LIBRARY_SORTS: dict[str, str] = {
         "COALESCE((SELECT pl.name FROM song_playlists sp JOIN playlists pl ON pl.playlist_id = sp.playlist_id "
         "WHERE sp.video_id = v.video_id LIMIT 1), '') COLLATE NOCASE"
     ),
+    "liked": "COALESCE((SELECT s2.liked FROM songs s2 WHERE s2.video_id = v.video_id), 0)",
 }
 DEFAULT_LIBRARY_SORT = "cached_at"
 
@@ -266,6 +267,10 @@ def _library_filters(
         clauses.append("EXISTS (SELECT 1 FROM downloads d WHERE d.video_info_id = v.id AND d.status = 'success')")
     elif completeness == "never downloaded":
         clauses.append("NOT EXISTS (SELECT 1 FROM downloads d WHERE d.video_info_id = v.id AND d.status = 'success')")
+    elif completeness == "liked":
+        clauses.append("EXISTS (SELECT 1 FROM songs s3 WHERE s3.video_id = v.video_id AND s3.liked = 1)")
+    elif completeness == "not liked":
+        clauses.append("NOT EXISTS (SELECT 1 FROM songs s3 WHERE s3.video_id = v.video_id AND s3.liked = 1)")
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, params
@@ -416,6 +421,7 @@ def fetch_videos(
             SELECT v.id, v.video_id, v.title, v.channel_name, v.playlist_name, v.duration,
                    v.upload_date, v.cached_at, v.video_url,
                    COALESCE(v.is_full_metadata, 0) AS is_full_metadata,
+                   COALESCE((SELECT s2.liked FROM songs s2 WHERE s2.video_id = v.video_id), 0) AS liked,
                    (SELECT COUNT(*) FROM downloads d
                      WHERE d.video_info_id = v.id AND d.status = 'success') AS download_count
             FROM youtube_video_information v
@@ -466,12 +472,32 @@ def database_stats(db_path: str) -> dict[str, int]:
     return counts
 
 
+def _liked_flags(db_path: str, video_ids: list[str]) -> dict[str, int]:
+    """The stored liked flag for each id, so an import can report what it changed."""
+    if not video_ids:
+        return {}
+    found: dict[str, int] = {}
+    with _connect(db_path) as conn:
+        for batch in _batched(video_ids):
+            marks = ", ".join("?" for _ in batch)
+            for row in conn.execute(
+                f"SELECT video_id, liked FROM songs WHERE video_id IN ({marks})", batch
+            ):
+                found[str(row["video_id"])] = int(row["liked"] or 0)
+    return found
+
+
+
 def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
     """One ImportedItem, as a dictionary, turned into an upsert_songs payload.
 
-    A backup knows things a listing never will: every credited artist, the album and which
-    playlists a song sits in. That is the whole reason the music tables exist, so all of it
-    is passed through rather than flattened into one column.
+    A backup knows things a listing never will: every credited artist, the album, which
+    playlists a song sits in and which were liked. That is the whole reason the music
+    tables exist, so all of it is passed through rather than flattened into one column.
+
+    play_count is still not stored. It is a running total that is stale the moment it is
+    read; a like is a decision. The Import grid still shows both, because there it
+    describes the file being looked at rather than the library.
     """
     collections = row.get("collections") or []
     credited = row.get("artists") or row.get("channel_name") or ""
@@ -484,9 +510,10 @@ def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
         "upload_date": row.get("upload_date"),
         "album": row.get("album") or "",
         "bitrate_label": row.get("bitrate_label"),
-        # play_count and liked are read from a backup and shown in the Import grid, but
-        # they are not stored: nothing here plays a song or likes one, so the columns
-        # could only ever hold whatever the backup said on the day it was read.
+        # Always present, never conditional. A backup is the authority on what is liked,
+        # so a song it does not list as liked has to arrive as an explicit False and
+        # override whatever an older import left behind (FSD 1.12).
+        "liked": "Liked" in collections,
         "in_library": "Library" in collections,
         "downloaded": "Downloaded" in collections,
         "origin": row.get("origin") or "import",
@@ -499,10 +526,13 @@ def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
 
 
 
-def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: str) -> tuple[int, int]:
+def import_video_rows(
+    db_path: str, rows: list[dict[str, Any]], source_label: str
+) -> tuple[int, int, dict[str, int]]:
     """Merge imported items into the cache under their own source row.
 
-    Returns (written, skipped). Rows already present keep their richer stored metadata:
+    Returns (written, skipped, liked counts). Rows already present keep their richer
+    stored metadata:
     an import must never overwrite a full yt-dlp record with a sparser backup entry.
 
     Writes to both layers. youtube_video_information is the flat cache the older views
@@ -513,7 +543,7 @@ def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: st
     from ..utils.shared import now_string
 
     if not rows:
-        return 0, 0
+        return 0, 0, {"liked": 0, "liked_added": 0, "liked_removed": 0}
 
     stamp = now_string()
     source_id = upsert_source(
@@ -571,5 +601,25 @@ def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: st
             )
             written += 1
 
-    upsert_songs(db_path, [_song_payload_from_import(row) for row in rows if row.get("video_id")])
-    return written, skipped
+    payloads = [_song_payload_from_import(row) for row in rows if row.get("video_id")]
+    liked_before = _liked_flags(db_path, [payload["video_id"] for payload in payloads])
+    upsert_songs(db_path, payloads)
+
+    # Added and removed are reported apart, not as one "changed" number. Overriding is
+    # what was asked for, but it means the last backup imported wins for every song two
+    # backups share, so a song liked in one and not the other loses the like. That is
+    # worth seeing on the way past rather than discovering later.
+    added = removed = 0
+    for payload in payloads:
+        was = bool(liked_before.get(payload["video_id"], 0))
+        now = bool(payload["liked"])
+        if now and not was:
+            added += 1
+        elif was and not now:
+            removed += 1
+
+    return written, skipped, {
+        "liked": sum(1 for payload in payloads if payload["liked"]),
+        "liked_added": added,
+        "liked_removed": removed,
+    }

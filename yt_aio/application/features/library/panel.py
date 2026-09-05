@@ -67,6 +67,7 @@ COLUMNS: list[tuple[str, str | None]] = [
     ("Video ID", "video_id"),
     ("Title", "title"),
     ("Channel", "channel_name"),
+    ("Liked", "liked"),
     ("Artists", "artists"),
     ("Album", "album"),
     ("Playlists", "playlists"),
@@ -77,15 +78,21 @@ COLUMNS: list[tuple[str, str | None]] = [
     ("Downloads", "download_count"),
 ]
 HEADERS = [heading for heading, _ in COLUMNS]
-NUMERIC_COLUMNS = {7, 11}
+NUMERIC_COLUMNS = {8, 12}
 
 COMPLETENESS = {
     "Everything": "all",
+    "Liked": "liked",
+    "Not liked": "not liked",
     "Full metadata only": "full",
     "Partial metadata only": "partial",
     "Downloaded": "downloaded",
     "Never downloaded": "never downloaded",
 }
+
+# What the Liked column shows. A tick reads faster than the word at a glance, and the
+# blank is deliberate: an empty cell is quieter than a column of "No".
+LIKED_MARK = "\u2665"
 
 # Upper bound in minutes. Zero means no bound, which is why the spin boxes start there.
 MAX_FILTER_MINUTES = 600
@@ -361,6 +368,7 @@ class LibraryPanel(QWidget):
                 record.get("video_id") or "",
                 record.get("title") or "",
                 record.get("channel_name") or record.get("playlist_name") or "",
+                LIKED_MARK if record.get("liked") else "",
                 record.get("artists") or "",
                 record.get("album") or "",
                 record.get("playlists") or "",

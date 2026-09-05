@@ -170,12 +170,16 @@ def clean_name(value: Any) -> str:
 def _drop_retired_columns(conn: sqlite3.Connection) -> None:
     """Remove columns the schema no longer has, from a database that predates the change.
 
+    `liked` was here briefly and is not any more: it went out in 1.11 and came back in
+    1.12, so a database written in between has to have it added again rather than
+    dropped. `_ensure_column` in init_db does that.
+
     CREATE TABLE IF NOT EXISTS leaves an existing table exactly as it was, so a column
     only ever disappears if something removes it. DROP COLUMN needs SQLite 3.35, released
     in 2021; on anything older the column is left in place, which is harmless because
     nothing reads or writes it any more.
     """
-    retired = {"songs": ("liked", "play_count")}
+    retired = {"songs": ("play_count",)}
     for table, columns in retired.items():
         if not _table_exists(conn, table):
             continue
@@ -464,10 +468,10 @@ def init_db(db_path: str) -> None:
                 first_seen TEXT
             );
 
-            -- No `liked` and no `play_count`. Both describe a phone music player's own
-            -- history, and this is a downloader: nothing here ever increments a play or
-            -- lets anyone like a song, so both columns could only ever hold whatever a
-            -- backup happened to say on the day it was imported (FSD 1.8.3).
+            -- `liked` is carried, `play_count` is not (FSD 1.8.3, then 1.12). Both come
+            -- from a phone music player and neither can be produced here, but they are
+            -- not the same kind of fact. Liked is a decision worth keeping and filtering
+            -- on; a play count is a running total that is stale the moment it is read.
             CREATE TABLE IF NOT EXISTS songs (
                 video_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT '',
@@ -476,6 +480,7 @@ def init_db(db_path: str) -> None:
                 video_url TEXT,
                 upload_date TEXT,
                 album_id TEXT,
+                liked INTEGER NOT NULL DEFAULT 0,
                 in_library INTEGER NOT NULL DEFAULT 0,
                 downloaded INTEGER NOT NULL DEFAULT 0,
                 bitrate_label TEXT,
@@ -535,6 +540,9 @@ def init_db(db_path: str) -> None:
         _ensure_column(conn, "youtube_video_information", "source_id", "INTEGER")
         _ensure_column(conn, "youtube_video_information", "cached_at", "TEXT")
         _ensure_column(conn, "youtube_video_information", "is_full_metadata", "INTEGER DEFAULT 0")
+        # Dropped in 1.11, wanted back in 1.12. A database written in between has no
+        # liked column and CREATE TABLE IF NOT EXISTS will not add one.
+        _ensure_column(conn, "songs", "liked", "INTEGER NOT NULL DEFAULT 0")
 
         _ensure_index(
             conn,
@@ -673,6 +681,9 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
     only touched for the kinds the payload actually mentions: an absent `artists` key
     means "this source knows nothing about artists", which is not the same as "this song
     has no artists", and silently deleting the credits would be the worse reading.
+
+    `liked` is the one field that overrides instead of merging, and only when the payload
+    names it. See the comment beside that statement for why it differs from `downloaded`.
     """
     if not payloads:
         return 0
@@ -705,9 +716,9 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                 """
                 INSERT INTO songs (
                     video_id, title, duration, thumbnail_url, video_url, upload_date,
-                    album_id, in_library, downloaded, bitrate_label,
+                    album_id, liked, in_library, downloaded, bitrate_label,
                     first_seen, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(video_id) DO UPDATE SET
                     title = COALESCE(NULLIF(excluded.title, ''), songs.title),
                     duration = COALESCE(excluded.duration, songs.duration),
@@ -728,6 +739,7 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                     payload.get("video_url") or f"https://www.youtube.com/watch?v={video_id}",
                     payload.get("upload_date"),
                     album_key,
+                    1 if payload.get("liked") else 0,
                     1 if payload.get("in_library") else 0,
                     1 if payload.get("downloaded") else 0,
                     payload.get("bitrate_label"),
@@ -735,6 +747,18 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                     stamp,
                 ),
             )
+
+            # `liked` overrides rather than merges, and only when the payload names it.
+            # A backup is the sole authority on what is liked, so unliking a song on the
+            # phone has to come back through here as a 0; MAX, which `downloaded` uses,
+            # would make the flag one-way and unliking impossible. The insert above sets
+            # the value for a brand new row and this statement settles an existing one.
+            # A source that says nothing about likes leaves the stored flag alone.
+            if "liked" in payload:
+                conn.execute(
+                    "UPDATE songs SET liked = ? WHERE video_id = ?",
+                    (1 if payload["liked"] else 0, video_id),
+                )
 
             if album_key:
                 conn.execute(
