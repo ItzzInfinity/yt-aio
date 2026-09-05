@@ -26,6 +26,7 @@ from ...db.local_files import (
     STATUS_IN_DATABASE,
     STATUS_NEW,
     STATUS_PROBABLE,
+    add_local_files_to_library,
     fetch_local_artists,
     fetch_local_files,
     fetch_local_roots,
@@ -110,6 +111,7 @@ class LocalScanPanel(QWidget):
         self._sort_descending = False
         self._loaded_once = False
         self._scan_worker: CallableThread | None = None
+        self._add_worker: CallableThread | None = None
         self._cancel_token: CancellationToken | None = None
 
         # ---- 2. widgets
@@ -121,6 +123,12 @@ class LocalScanPanel(QWidget):
         self.scan_button = QPushButton("Scan folder")
         self.stop_button = QPushButton("Stop")
         self.forget_button = QPushButton("Forget this folder")
+        self.add_button = QPushButton("ADD TO DATABASE")
+        self.add_button.setToolTip(
+            "Write every file the filters currently match into the library.\n"
+            "A file that names a video becomes a song and is flagged as downloaded.\n"
+            "A file that names none is recorded separately, out of the way of the song queries."
+        )
 
         self.root_select = QComboBox()
         self.root_select.setMinimumWidth(240)
@@ -207,6 +215,7 @@ class LocalScanPanel(QWidget):
         filter_column.addLayout(second_row)
 
         action_row = QHBoxLayout()
+        action_row.addWidget(self.add_button)
         action_row.addWidget(self.forget_button)
         action_row.addStretch(1)
         action_row.addWidget(self.prev_button)
@@ -242,6 +251,7 @@ class LocalScanPanel(QWidget):
         self.browse_button.clicked.connect(self._browse)
         self.scan_button.clicked.connect(self._scan)
         self.stop_button.clicked.connect(self._cancel)
+        self.add_button.clicked.connect(self._add_to_database)
         self.forget_button.clicked.connect(self._forget)
         self.refresh_button.clicked.connect(self._reload)
         self.clear_filters_button.clicked.connect(self._clear_filters)
@@ -298,6 +308,7 @@ class LocalScanPanel(QWidget):
         self.scan_button.setEnabled(not busy)
         self.stop_button.setEnabled(busy)
         self.forget_button.setEnabled(not busy and bool(self._selected_root()))
+        self.add_button.setEnabled(not busy and bool(self._rows))
         for widget in (
             self.root_select, self.search_input, self.status_select, self.artist_select,
             self.min_minutes, self.max_minutes, self.untagged_box, self.page_size,
@@ -407,6 +418,9 @@ class LocalScanPanel(QWidget):
             f"Showing {first}-{last} of {self._total}" if self._total else "No files match these filters."
         )
         self._update_page_buttons()
+        # Whether there is anything to add depends on what the filters just returned, so
+        # enablement is recomputed here rather than only when a task starts or ends.
+        self._set_busy(self._busy)
 
     def _describe(self, record: dict[str, Any]) -> str:
         """The file on the left, what the database holds on the right."""
@@ -464,6 +478,76 @@ class LocalScanPanel(QWidget):
         chosen = QFileDialog.getExistingDirectory(self, "Choose a folder of audio files", start)
         if chosen:
             self.folder_input.setText(chosen)
+
+    @pyqtSlot()
+    def _add_to_database(self) -> None:
+        """Write what the filters match into the library (FSD 1.8.3).
+
+        Acts on the whole filtered set, not the page on screen, because this grid filters
+        rather than selects. The count is stated in the confirmation so what is about to
+        happen is never a surprise.
+        """
+        if self._busy:
+            self._log("WARN", "A task is already running.")
+            return
+        if not self._total:
+            QMessageBox.information(self, "Nothing to add", "No scanned file matches the current filters.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Add to database",
+            f"Write {self._total} scanned file(s) into the library?\n\n"
+            "Files that name a video become songs and are flagged as downloaded.\n"
+            "Files that name none are recorded separately, so they never answer a\n"
+            "duplicate check for a video they are not.\n\n"
+            "Nothing on disk is touched.",
+            MB_YES | MB_NO,
+            MB_NO,
+        )
+        if answer != MB_YES:
+            return
+
+        record_user_action(self._ctx.db_path, "local scan add to database")
+        db_path = self._ctx.db_path
+        low, high = self._duration_bounds()
+        filters = {
+            "root_path": self._selected_root(),
+            "search": self.search_input.text(),
+            "status": self.status_select.currentText(),
+            "artist": self.artist_select.currentText(),
+            "min_duration": low,
+            "max_duration": high,
+            "only_untagged": self.untagged_box.isChecked(),
+        }
+
+        self._cancel_token = CancellationToken()
+        self._set_busy(True)
+        self._log("TX", f"Adding {self._total} file(s) to the library.")
+
+        def job(log, _token):
+            def emit(message: str) -> None:
+                log(f"[{_stamp()}] [INFO] {message}")
+
+            return add_local_files_to_library(db_path, emit, **filters)
+
+        self._add_worker = CallableThread(job, self._cancel_token, done_message="Add finished.")
+        self._add_worker.log_message.connect(self.append_log)
+        self._add_worker.result_ready.connect(self._on_added)
+        self._add_worker.work_complete.connect(self._on_work_complete)
+        self._add_worker.work_failed.connect(self._on_work_failed)
+        self._add_worker.start()
+
+    @pyqtSlot(object)
+    def _on_added(self, summary: dict[str, Any]) -> None:
+        self._reload()
+        self._log(
+            "INFO",
+            f"{summary['considered']} file(s) written. Songs: {summary['songs_added']} added, "
+            f"{summary['songs_updated']} already present, {summary['flagged_downloaded']} newly "
+            f"flagged as downloaded. Without a video id: {summary['local_only_added']} added and "
+            f"{summary['local_only_updated']} refreshed, kept out of the song tables.",
+        )
 
     @pyqtSlot()
     def _scan(self) -> None:

@@ -167,6 +167,35 @@ def clean_name(value: Any) -> str:
     return _WHITESPACE.sub(" ", str(value or "")).strip()
 
 
+def _drop_retired_columns(conn: sqlite3.Connection) -> None:
+    """Remove columns the schema no longer has, from a database that predates the change.
+
+    CREATE TABLE IF NOT EXISTS leaves an existing table exactly as it was, so a column
+    only ever disappears if something removes it. DROP COLUMN needs SQLite 3.35, released
+    in 2021; on anything older the column is left in place, which is harmless because
+    nothing reads or writes it any more.
+    """
+    retired = {"songs": ("liked", "play_count")}
+    for table, columns in retired.items():
+        if not _table_exists(conn, table):
+            continue
+        present = _table_columns(conn, table)
+        for column in columns:
+            if column not in present:
+                continue
+            try:
+                conn.execute(f'ALTER TABLE "{table}" DROP COLUMN "{column}"')
+            except sqlite3.OperationalError:
+                pass
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row is not None
+
+
 def _slug(text: str) -> str:
     """A stable key for a name that has no identifier of its own.
 
@@ -435,6 +464,10 @@ def init_db(db_path: str) -> None:
                 first_seen TEXT
             );
 
+            -- No `liked` and no `play_count`. Both describe a phone music player's own
+            -- history, and this is a downloader: nothing here ever increments a play or
+            -- lets anyone like a song, so both columns could only ever hold whatever a
+            -- backup happened to say on the day it was imported (FSD 1.8.3).
             CREATE TABLE IF NOT EXISTS songs (
                 video_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT '',
@@ -443,10 +476,8 @@ def init_db(db_path: str) -> None:
                 video_url TEXT,
                 upload_date TEXT,
                 album_id TEXT,
-                liked INTEGER NOT NULL DEFAULT 0,
                 in_library INTEGER NOT NULL DEFAULT 0,
                 downloaded INTEGER NOT NULL DEFAULT 0,
-                play_count INTEGER NOT NULL DEFAULT 0,
                 bitrate_label TEXT,
                 first_seen TEXT,
                 last_updated TEXT
@@ -464,6 +495,29 @@ def init_db(db_path: str) -> None:
                 album_id TEXT NOT NULL,
                 position INTEGER,
                 PRIMARY KEY (video_id, album_id)
+            );
+
+            -- Audio on disk that carries no video id (FSD 1.8.3). It is kept out of
+            -- `songs` on purpose. A song there is something with a YouTube identity that
+            -- can be looked up, re-fetched and matched; a file with only a file name and
+            -- an ID3 tag is none of those. Putting the two in one table would mean every
+            -- duplicate check, every artist filter and every "do I already have this"
+            -- answer had to step over rows it can never resolve, and a title collision
+            -- would read as a match that is not one.
+            CREATE TABLE IF NOT EXISTS local_only_tracks (
+                file_path TEXT PRIMARY KEY,
+                root_path TEXT,
+                file_name TEXT,
+                title TEXT,
+                artist TEXT,
+                album TEXT,
+                duration INTEGER,
+                bitrate INTEGER,
+                size_bytes INTEGER,
+                modified_at TEXT,
+                tag_source TEXT,
+                first_seen TEXT,
+                last_updated TEXT
             );
 
             CREATE TABLE IF NOT EXISTS song_playlists (
@@ -552,9 +606,13 @@ def init_db(db_path: str) -> None:
             ("idx_song_artists_artist", "CREATE INDEX IF NOT EXISTS {name} ON song_artists(artist_id)"),
             ("idx_song_albums_album", "CREATE INDEX IF NOT EXISTS {name} ON song_albums(album_id)"),
             ("idx_song_playlists_playlist", "CREATE INDEX IF NOT EXISTS {name} ON song_playlists(playlist_id)"),
+            ("idx_local_only_title", "CREATE INDEX IF NOT EXISTS {name} ON local_only_tracks(title COLLATE NOCASE)"),
+            ("idx_local_only_artist", "CREATE INDEX IF NOT EXISTS {name} ON local_only_tracks(artist COLLATE NOCASE)"),
+            ("idx_local_only_root", "CREATE INDEX IF NOT EXISTS {name} ON local_only_tracks(root_path)"),
         ):
             _ensure_index(conn, name, statement)
 
+        _drop_retired_columns(conn)
         _backfill_relations(conn)
         _backfill_music_tables(conn)
 
@@ -647,9 +705,9 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                 """
                 INSERT INTO songs (
                     video_id, title, duration, thumbnail_url, video_url, upload_date,
-                    album_id, liked, in_library, downloaded, play_count, bitrate_label,
+                    album_id, in_library, downloaded, bitrate_label,
                     first_seen, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(video_id) DO UPDATE SET
                     title = COALESCE(NULLIF(excluded.title, ''), songs.title),
                     duration = COALESCE(excluded.duration, songs.duration),
@@ -657,10 +715,8 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                     video_url = COALESCE(NULLIF(excluded.video_url, ''), songs.video_url),
                     upload_date = COALESCE(NULLIF(excluded.upload_date, ''), songs.upload_date),
                     album_id = COALESCE(excluded.album_id, songs.album_id),
-                    liked = MAX(songs.liked, excluded.liked),
                     in_library = MAX(songs.in_library, excluded.in_library),
                     downloaded = MAX(songs.downloaded, excluded.downloaded),
-                    play_count = MAX(songs.play_count, excluded.play_count),
                     bitrate_label = COALESCE(NULLIF(excluded.bitrate_label, ''), songs.bitrate_label),
                     last_updated = excluded.last_updated
                 """,
@@ -672,10 +728,8 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                     payload.get("video_url") or f"https://www.youtube.com/watch?v={video_id}",
                     payload.get("upload_date"),
                     album_key,
-                    1 if payload.get("liked") else 0,
                     1 if payload.get("in_library") else 0,
                     1 if payload.get("downloaded") else 0,
-                    int(payload.get("play_count") or 0),
                     payload.get("bitrate_label"),
                     stamp,
                     stamp,

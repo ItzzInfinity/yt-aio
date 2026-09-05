@@ -220,6 +220,7 @@ class LibraryPanel(QWidget):
         self.page_size.valueChanged.connect(self._reset_and_reload)
         header.sectionClicked.connect(self._sort_by_column)
         self.select_all_box.toggled.connect(self._toggle_all)
+        self.table.itemChanged.connect(self._on_item_changed)
         self.delete_button.clicked.connect(self._delete_selected)
         self.prev_button.clicked.connect(self._previous_page)
         self.next_button.clicked.connect(self._next_page)
@@ -335,7 +336,19 @@ class LibraryPanel(QWidget):
                 checked.append(record)
         return checked
 
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        """Only the tick box column changes a selection; the rest are read-only text.
+
+        No pyqtSlot decorator. itemChanged carries a QTableWidgetItem*, and declaring the
+        slot as taking `object` makes the signatures incompatible and the connection fail
+        outright at construction.
+        """
+        if item is not None and item.column() == 0:
+            self._sync_delete_button()
+
     def _render(self) -> None:
+        # Filling the grid fires itemChanged for every cell. Those are not selections.
+        self.table.blockSignals(True)
         self.table.setRowCount(len(self._rows))
         for row_index, record in enumerate(self._rows):
             box = QTableWidgetItem()
@@ -362,6 +375,8 @@ class LibraryPanel(QWidget):
                 if column_index in NUMERIC_COLUMNS:
                     cell.setTextAlignment(ALIGN_RIGHT)
                 self.table.setItem(row_index, column_index, cell)
+
+        self.table.blockSignals(False)
 
         self.table.resizeColumnsToContents()
         self._show_sort_indicator()
@@ -469,10 +484,25 @@ class LibraryPanel(QWidget):
     @pyqtSlot(bool)
     def _toggle_all(self, checked: bool) -> None:
         state = CHECKED if checked else UNCHECKED
+        # One signal for the whole page instead of one per row, so the delete button is
+        # re-evaluated once at the end rather than for every tick box in turn.
+        self.table.blockSignals(True)
         for row_index in range(self.table.rowCount()):
             box = self.table.item(row_index, 0)
             if box is not None:
                 box.setCheckState(state)
+        self.table.blockSignals(False)
+        self._sync_delete_button()
+
+    @pyqtSlot()
+    def _sync_delete_button(self) -> None:
+        """Delete is available whenever anything is ticked, however it was ticked.
+
+        This used to be reachable only through `Select all on this page`, because nothing
+        watched the individual tick boxes: ticking rows one at a time left the button
+        disabled and the only way to delete a single row was to select the whole page and
+        untick the rest.
+        """
         self.delete_button.setEnabled(bool(self._checked_rows()))
 
     @pyqtSlot()

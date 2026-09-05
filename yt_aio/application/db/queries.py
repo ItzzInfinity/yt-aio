@@ -469,9 +469,9 @@ def database_stats(db_path: str) -> dict[str, int]:
 def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
     """One ImportedItem, as a dictionary, turned into an upsert_songs payload.
 
-    A backup knows things a listing never will: every credited artist, the album, which
-    playlists a song sits in, how often it was played. That is the whole reason the music
-    tables exist, so all of it is passed through rather than flattened into one column.
+    A backup knows things a listing never will: every credited artist, the album and which
+    playlists a song sits in. That is the whole reason the music tables exist, so all of it
+    is passed through rather than flattened into one column.
     """
     collections = row.get("collections") or []
     credited = row.get("artists") or row.get("channel_name") or ""
@@ -484,8 +484,9 @@ def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
         "upload_date": row.get("upload_date"),
         "album": row.get("album") or "",
         "bitrate_label": row.get("bitrate_label"),
-        "play_count": row.get("play_count") or 0,
-        "liked": "Liked" in collections,
+        # play_count and liked are read from a backup and shown in the Import grid, but
+        # they are not stored: nothing here plays a song or likes one, so the columns
+        # could only ever hold whatever the backup said on the day it was read.
         "in_library": "Library" in collections,
         "downloaded": "Downloaded" in collections,
         "origin": row.get("origin") or "import",

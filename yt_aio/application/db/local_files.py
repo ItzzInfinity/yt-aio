@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 from ..utils.local_library import LocalTrack, normalise_title
 from ..utils.shared import now_string
-from .database_manager import _connect, _row_to_dict, _table_columns, init_db
+from .database_manager import _batched, _connect, _row_to_dict, _table_columns, init_db
 
 LogFn = Callable[[str], None]
 
@@ -358,6 +358,205 @@ def fetch_local_files(
             [*params, limit, offset],
         ).fetchall()
         return [_row_to_dict(row) for row in rows], int(total)
+
+
+
+def _bitrate_label(bitrate: Any) -> str:
+    """The bitrate as the songs table stores it, "192k", or empty when it is unknown."""
+    try:
+        value = int(bitrate)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    # mutagen reports bits per second, ffprobe sometimes kilobits. Anything above a
+    # thousand is the former.
+    return f"{value // 1000}k" if value > 1000 else f"{value}k"
+
+
+def add_local_files_to_library(
+    db_path: str,
+    log: LogFn,
+    *,
+    root_path: str = "",
+    search: str = "",
+    status: str = "",
+    artist: str = "",
+    min_duration: int | None = None,
+    max_duration: int | None = None,
+    only_untagged: bool = False,
+) -> dict[str, int]:
+    """Write the scanned files the filters currently match into the library (FSD 1.8.3).
+
+    Two destinations, decided by one thing: whether the file carries a video id.
+
+    With one, the file is evidence that this video is already on disk, so the song is
+    created or updated and `downloaded` is set. Fields the song already has are left
+    alone. A yt-dlp title is better evidence than an ID3 tag written by an unknown
+    ripper, so the file fills gaps rather than overwriting; `local_files` already holds
+    the file's own values, refreshed on every scan, for anyone who wants to compare.
+
+    Without one, the file goes to `local_only_tracks`. It is real music and worth
+    recording, but it has no identity anything can look up, and letting it into `songs`
+    would mean every duplicate check had to reason about rows it can never resolve.
+
+    Acts on what the filters match, not on one page, because the grid is filter-driven
+    and has no row selection.
+    """
+    from .database_manager import upsert_songs
+
+    init_db(db_path)
+    stamp = now_string()
+    where, params = _local_filters(
+        root_path, search, status, artist, min_duration, max_duration, only_untagged
+    )
+
+    with _connect(db_path) as conn:
+        rows = [
+            _row_to_dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT l.file_path, l.root_path, l.file_name, l.title, l.artist, l.album,
+                       l.duration, l.bitrate, l.size_bytes, l.modified_at, l.tag_source,
+                       l.video_id
+                FROM local_files l
+                {where}
+                """,
+                params,
+            )
+        ]
+
+    if not rows:
+        log("Nothing matches the current filters, so nothing was written.")
+        return {"considered": 0, "songs_added": 0, "songs_updated": 0, "flagged_downloaded": 0,
+                "local_only_added": 0, "local_only_updated": 0}
+
+    with_id = [row for row in rows if str(row.get("video_id") or "").strip()]
+    without_id = [row for row in rows if not str(row.get("video_id") or "").strip()]
+    log(f"{len(rows)} file(s) match: {len(with_id)} with a video id, {len(without_id)} without.")
+
+    summary = {
+        "considered": len(rows),
+        "songs_added": 0,
+        "songs_updated": 0,
+        "flagged_downloaded": 0,
+        "local_only_added": 0,
+        "local_only_updated": 0,
+    }
+
+    # ---- files that name a video
+    if with_id:
+        wanted = [str(row["video_id"]).strip() for row in with_id]
+        with _connect(db_path) as conn:
+            existing: dict[str, int] = {}
+            for batch in _batched(wanted):
+                marks = ", ".join("?" for _ in batch)
+                for found in conn.execute(
+                    f"SELECT video_id, downloaded FROM songs WHERE video_id IN ({marks})", batch
+                ):
+                    existing[str(found["video_id"])] = int(found["downloaded"] or 0)
+
+        summary["songs_added"] = len({vid for vid in wanted if vid not in existing})
+        summary["songs_updated"] = len({vid for vid in wanted if vid in existing})
+        summary["flagged_downloaded"] = len(
+            {vid for vid in wanted if existing.get(vid, 0) == 0}
+        )
+
+        payloads = []
+        for row in with_id:
+            payload: dict[str, Any] = {
+                "video_id": str(row["video_id"]).strip(),
+                "title": row.get("title") or "",
+                "duration": row.get("duration"),
+                "bitrate_label": _bitrate_label(row.get("bitrate")),
+                "downloaded": True,
+                "in_library": True,
+                "origin": "local scan",
+            }
+            if row.get("album"):
+                payload["album"] = row["album"]
+            if row.get("artist"):
+                payload["artists"] = row["artist"]
+            payloads.append(payload)
+        upsert_songs(db_path, payloads)
+
+    # ---- files that name nothing
+    if without_id:
+        with _connect(db_path) as conn:
+            known = {
+                str(found["file_path"])
+                for found in conn.execute("SELECT file_path FROM local_only_tracks")
+            }
+            for row in without_id:
+                path = str(row["file_path"])
+                if path in known:
+                    summary["local_only_updated"] += 1
+                else:
+                    summary["local_only_added"] += 1
+                conn.execute(
+                    """
+                    INSERT INTO local_only_tracks (
+                        file_path, root_path, file_name, title, artist, album, duration,
+                        bitrate, size_bytes, modified_at, tag_source, first_seen, last_updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(file_path) DO UPDATE SET
+                        root_path = excluded.root_path,
+                        file_name = excluded.file_name,
+                        title = excluded.title,
+                        artist = excluded.artist,
+                        album = excluded.album,
+                        duration = excluded.duration,
+                        bitrate = excluded.bitrate,
+                        size_bytes = excluded.size_bytes,
+                        modified_at = excluded.modified_at,
+                        tag_source = excluded.tag_source,
+                        last_updated = excluded.last_updated
+                    """,
+                    (
+                        path,
+                        row.get("root_path"),
+                        row.get("file_name"),
+                        row.get("title"),
+                        row.get("artist"),
+                        row.get("album"),
+                        row.get("duration"),
+                        row.get("bitrate"),
+                        row.get("size_bytes"),
+                        row.get("modified_at"),
+                        row.get("tag_source"),
+                        stamp,
+                        stamp,
+                    ),
+                )
+
+    log(
+        f"Songs: {summary['songs_added']} added, {summary['songs_updated']} already present, "
+        f"{summary['flagged_downloaded']} newly flagged as downloaded."
+    )
+    if without_id:
+        log(
+            f"No video id: {summary['local_only_added']} added and "
+            f"{summary['local_only_updated']} refreshed in local_only_tracks, kept out of songs."
+        )
+    return summary
+
+
+def fetch_local_only_tracks(
+    db_path: str,
+    *,
+    root_path: str = "",
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """The audio recorded as having no video id, for anyone who wants to see it."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        clause = "WHERE root_path = ?" if root_path.strip() else ""
+        params: list[Any] = [root_path.strip()] if root_path.strip() else []
+        rows = conn.execute(
+            f"SELECT * FROM local_only_tracks {clause} ORDER BY title COLLATE NOCASE LIMIT ?",
+            [*params, int(limit)],
+        ).fetchall()
+        return [_row_to_dict(row) for row in rows]
 
 
 def fetch_local_roots(db_path: str) -> list[dict[str, Any]]:

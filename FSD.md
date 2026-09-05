@@ -1,7 +1,38 @@
 <!-- Functional Specification Document -->
 # 1. Project name: YT AIO
 
-## Current state — 2026-09-05 (session 3) — Windows compatibility and clone-and-run
+## Current state — 2026-09-05 (session 4) — the 1.8.3 batch: final schema, Local Scan writes, Library delete
+
+- **Current phase:** 1.11 roadmap complete. All four requests in FSD 1.8.3 are closed.
+- **Last completed task:** L1, the Library delete button.
+- **Next task:** Nothing pending. Worth doing by hand: press ADD TO DATABASE on a folder of your own music and check the counts in the log against what you expected.
+
+### Session summary
+1. **J — the final schema.** `songs.liked` and `songs.play_count` are gone, from the schema, from every write path, and from any database that already had them. The parsers still read a backup's plays and likes, because that is what decides the Import grid's Collection label.
+2. **K — Local Scan writes to the library.** A new `local_only_tracks` table for audio with no video id, `add_local_files_to_library` in the database layer, and an `ADD TO DATABASE` button that runs it on the background thread.
+3. **L — Library.** `Delete selected` now enables when rows are ticked individually, which it never did before.
+
+**Gotchas learned this session:**
+- **`CREATE TABLE IF NOT EXISTS` never removes a column.** Editing the DDL changes what a new database gets and nothing else. A column only disappears if something explicitly drops it, so a schema change needs a migration beside the edit or the two diverge silently and only on other people's machines.
+- **A grid that fills itself fires `itemChanged` for every cell.** Connecting to it without blocking the signal during `_render` means every reload looks like two hundred selections. Block while filling, unblock after.
+- **`@pyqtSlot(object)` is not a wildcard.** It declares the slot as taking `PyQt_PyObject`, so connecting it to `itemChanged(QTableWidgetItem*)` fails outright at construction with `Incompatible sender/receiver arguments`. A plain undecorated method connects fine.
+- **Enablement computed once at construction is computed before the data exists.** The ADD TO DATABASE button depends on whether any row matched, which is unknown until the first query returns, so `_render` has to recompute it. The same shape of bug as the Library delete button, in a different tab.
+- **"Update the existing files if the metadata changed" needed a decision, not just code.** A local file's ID3 tag is often worse than a yt-dlp record, so the file fills gaps in a song rather than overwriting it, and `local_files` keeps the file's own values for comparison. Stated in the code and in the annotation, because the other reading was defensible.
+
+### Partially done
+- none
+
+### Blocked
+- none
+
+### Next step (exact)
+Open the Local Scan tab, scan a folder of music that was not downloaded by this application, and press ADD TO DATABASE. Check the log line: files with a video id should be counted under Songs and files without under "No video id". Then open the Library tab, tick two rows individually, and confirm `Delete selected` becomes available without touching `Select all on this page`.
+
+### Assumptions
+- The ADD TO DATABASE button acts on everything the filters match rather than on a selection, because the Local Scan grid has no tick boxes and is filter-driven throughout.
+- `local_only_tracks` has no tab of its own yet. `fetch_local_only_tracks` exists for one, but nothing in the FSD asked to display those rows, only to stop them polluting the song queries.
+
+## Previous state — 2026-09-05 (session 3) — Windows compatibility and clone-and-run
 
 - **Current phase:** 1.10 roadmap complete. Runs on Windows, macOS and Linux from a fresh clone.
 - **Last completed task:** I2, the README rewrite, plus undoing the font regression found while verifying H5.
@@ -344,6 +375,11 @@ Run `python3 -m pip install -U yt-dlp`, sign in to YouTube in Brave once, then s
   - I have installed Brave Browser in the settings tab add the path for cookies from Brave Browser as a fallback - **Done**. Your Brave is a snap, so its cookies are at `~/snap/brave/678/.config/BraveSoftware/Brave-Browser/Default/`, which is not where yt-dlp looks. `~/.config/BraveSoftware/Brave-Browser` exists on your machine and contains no profile at all, which is why testing for a directory was never enough. The Settings tab now offers the real path in `cookie_fallback_home`, lists the profiles it found in `cookie_fallback_profile`, and prints under the browser field exactly what was found and what to set. One caveat: the cookies themselves are currently stale, and yt-dlp reports them as rotated. Sign in to YouTube in Brave once and they will work.
 
   - **Not part of the request, but you should know**: every download on this machine fails with `HTTP Error 403: Forbidden`, including the old command with none of these changes applied. The installed yt-dlp is version 2026.03.17, which it reports as more than 90 days stale. Run `python3 -m pip install -U yt-dlp` before trusting a download test.
+### 1.8.3. Combine the best of opentune and vitune database which will be my final database.
+- Read `./Docs/opentune_vs_vitune.html` file and make a final database `songs.play_count` & `songs.liked` I dont need them - **Done**. Both columns are gone from the schema, from every write path, and from any database that already had them, through a migration guarded so it runs once and is safe to re-run. They were the right things to drop: this is a downloader, so nothing here ever plays a song or likes one, and the columns could only ever hold whatever a backup happened to say on the day it was read. The parsers still read a backup's plays and likes, because that is how the Import grid decides the Collection label for the file you are looking at. Verified by importing your real 5029-song ViTune backup into a migrated copy: 8519 songs, 11610 credits, artist filter unchanged.
+- in local scan tab I want a button `ADD TO DATABASE` which will add the new audio files to the database (if they have video id) and also update the existing audio files in the database if they have any changes in the metadata. And check if already they exist but not flagged as downloaded then update the flag to downloaded. - **Done**. The button acts on everything the filters currently match, not the page on screen, because this grid filters rather than selects, and it says how many before it does anything. One judgement call worth knowing: a file fills in what a song is missing but does not overwrite what it already has, because a yt-dlp title is better evidence than an ID3 tag from an unknown ripper, and `local_files` already keeps the file's own values refreshed on every scan for comparison. Tested on 92 of your real downloads and on a folder built for the purpose: an unflagged video went to downloaded with no duplicate row, and a second press added nothing.
+- If video id is not present then add them in a different table so they will be logged but not interfere with direct access to the query and give false positive for the existing audio files in the database. - **Done** as `local_only_tracks`, keyed on the file path. Exactly the reasoning you gave: a song in `songs` has a YouTube identity that can be looked up and re-fetched, a file with only an ID3 tag has none, and mixing them would make a title collision read as a match it is not. Three untagged files in the test folder landed there with none reaching `songs`.
+- in `Library` Tab until I click select all on this page it wont allow me to delete the selected audio files from the database. - **Fixed**. Root cause: nothing watched the individual tick boxes, so the only code path that ever enabled `Delete selected` was the select-all checkbox. Deleting one row meant selecting the whole page and unticking the rest. The grid's own change signal now drives the button. Two traps on the way: filling the grid fires that signal for every cell and none of those are selections, so `_render` blocks it; and declaring the slot as taking `object` makes Qt refuse the connection outright, because the signal carries a table item.
 
 ## 1.9. Roadmap — batch from FSD 1.8.2 (line 243 onwards)
 
@@ -410,6 +446,23 @@ ships generated files that carry one particular machine's absolute paths.
 ### I. Telling the user
 - [x] I1 — A start-up preflight that names what is missing instead of failing obscurely — done 2026-09-05; new `yt_aio/preflight.py` runs from `__main__` before the shell is imported, because importing the shell reaches PyQt on its third line and a check that runs afterwards never runs on the machine that needs it. It separates what blocks start-up, the Python version, a Qt binding and yt-dlp, from what only limits it, mutagen and ffmpeg, and prints the pip command for each. Enabling this meant making `application/utils/__init__.py` lazy: its eager re-exports pulled in PyQt through the panels, so the check could not run without the thing it checks for. That also removes the db-to-utils import cycle noted in session 1. Verified both ways: a healthy machine prints nothing and starts, and a machine with nothing installed gets named requirements and exit code 1.
 - [x] I2 — Rewrite `README.md` with per-platform install and run instructions — done 2026-09-05; copy-pasteable clone-install-run blocks for Windows, macOS and Linux, four ways to satisfy ffmpeg on Windows, the note that `python3` is not usually a Windows command, what the preflight prints when something is missing, what the first run creates, and a layout table. The old README described a `styles.qss` that no longer exists and listed the config and database as project files when they are now generated. Every documentation link and every path in the layout table was checked to exist.
+
+## 1.11. Roadmap — batch from FSD 1.8.3
+
+The four requests in `1.8.3`, split into atomic tasks. One per pass: implement it, run the
+self-check, tick it with the date and a one-line summary.
+
+### J. The final schema
+- [x] J1 — Drop `songs.liked` and `songs.play_count`, with a migration for existing databases — done 2026-09-05; gone from the `init_db` script, and `_drop_retired_columns` removes them from a database that predates the change, because `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it was. SQLite here is 3.37 and `DROP COLUMN` arrived in 3.35; on anything older the column is left alone, which is harmless once nothing reads it. Verified on a copy of the live database: 3490 rows and all 13 downloaded flags survived, and a second run changed nothing.
+- [x] J2 — Stop every write path filling them — done 2026-09-05; removed from the `upsert_songs` insert, its conflict clause and its parameters, and from the importer's payload builder. The parsers still read a backup's play counts and likes, because that is how they decide the Collection label and the Import grid's Plays column, which describes the file being looked at rather than the library. Verified by importing the real 5029-song ViTune backup into a migrated database: 8519 songs, 11610 credits, and the artist filter still returning 212 for Arijit Singh.
+
+### K. Local Scan writes to the library
+- [x] K1 — A `local_only_tracks` table for audio that carries no video id — done 2026-09-05; keyed on the file path, with title, artist, album, duration, bitrate and where it was found, plus three indexes. Kept out of `songs` deliberately: a song there has a YouTube identity that can be looked up and re-fetched, and a file with only an ID3 tag has none, so letting the two share a table would make every duplicate check step over rows it can never resolve and turn a title collision into a false match. Added to an existing database with the 8519 songs untouched.
+- [x] K2 — `add_local_files_to_library` in the database layer: insert, update, and flag as downloaded — done 2026-09-05; one function, two destinations, decided by whether the file carries a video id. A file that does becomes a song through `upsert_songs` with `downloaded` set; a file that does not goes to `local_only_tracks`. The file fills gaps rather than overwriting, because a yt-dlp title is better evidence than a tag from an unknown ripper, and `local_files` already keeps the file's own values refreshed on every scan. Verified on 92 real downloads and then on a fabricated mixed folder: a video already in `songs` but unflagged had its flag flipped 0 to 1 with no duplicate row, three untagged files landed in `local_only_tracks` with none leaking into `songs`, and a second run added nothing and flagged nothing.
+- [x] K3 — The `ADD TO DATABASE` button and its worker in the Local Scan tab — done 2026-09-05; runs on the shared `CallableThread` like the scan does, acts on the whole filtered set rather than the page because this grid filters instead of selecting, and states the count in the confirmation. Enablement had to move into `_render`: it was computed once at construction, before any row existed, so the button stayed dead. Verified in the running application: enabled with 1463 matches, disabled when a filter matches none, enabled again when cleared, and disabled while a task runs.
+
+### L. Library
+- [x] L1 — Enable `Delete selected` when rows are ticked one at a time, not only by select-all — done 2026-09-05; nothing watched the individual tick boxes, so `setEnabled` was only ever reached through the select-all checkbox and deleting one row meant selecting the whole page and unticking the rest. The grid's `itemChanged` now drives it, filtered to the tick box column. Two details made it work: `_render` blocks the signal while it fills the grid, because setting a cell fires `itemChanged` for every cell and none of those are selections, and the slot carries no `pyqtSlot(object)` decorator, which declares a signature Qt refuses to connect to `itemChanged(QTableWidgetItem*)`. Verified through all seven states: load, one tick, two ticks, untick, select all, clear, and reload.
 
 ## Self-check
 
