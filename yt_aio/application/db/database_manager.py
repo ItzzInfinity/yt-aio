@@ -193,6 +193,29 @@ def init_db(db_path: str) -> None:
                 FOREIGN KEY(source_id) REFERENCES sources(id)
             );
 
+            CREATE TABLE IF NOT EXISTS local_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL UNIQUE,
+                root_path TEXT,
+                file_name TEXT,
+                extension TEXT,
+                size_bytes INTEGER,
+                modified_at TEXT,
+                title TEXT,
+                artist TEXT,
+                album TEXT,
+                duration INTEGER,
+                bitrate INTEGER,
+                video_id TEXT,
+                tag_source TEXT,
+                match_status TEXT,
+                match_detail TEXT,
+                matched_video_info_id INTEGER,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                FOREIGN KEY(matched_video_info_id) REFERENCES youtube_video_information(id)
+            );
+
             CREATE TABLE IF NOT EXISTS settings_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 setting_name TEXT,
@@ -269,6 +292,31 @@ def init_db(db_path: str) -> None:
             conn,
             "idx_downloads_source_id",
             "CREATE INDEX IF NOT EXISTS {name} ON downloads(source_id)",
+        )
+        _ensure_index(
+            conn,
+            "idx_downloads_file_path",
+            "CREATE INDEX IF NOT EXISTS {name} ON downloads(file_path)",
+        )
+        _ensure_index(
+            conn,
+            "idx_local_files_file_path",
+            "CREATE UNIQUE INDEX IF NOT EXISTS {name} ON local_files(file_path)",
+        )
+        _ensure_index(
+            conn,
+            "idx_local_files_root_path",
+            "CREATE INDEX IF NOT EXISTS {name} ON local_files(root_path)",
+        )
+        _ensure_index(
+            conn,
+            "idx_local_files_video_id",
+            "CREATE INDEX IF NOT EXISTS {name} ON local_files(video_id)",
+        )
+        _ensure_index(
+            conn,
+            "idx_local_files_match_status",
+            "CREATE INDEX IF NOT EXISTS {name} ON local_files(match_status)",
         )
 
         _backfill_relations(conn)

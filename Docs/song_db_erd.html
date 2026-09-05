@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>song.db — Database Relationship Map</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0c10;
+    --surface: #12161e;
+    --surface2: #1a202e;
+    --border: #252d3e;
+    --primary: #00e5ff;
+    --primary-dim: rgba(0,229,255,0.12);
+    --accent: #ff6b6b;
+    --accent2: #ffd93d;
+    --accent3: #6bcb77;
+    --accent4: #c77dff;
+    --text: #e0e8f0;
+    --muted: #5a6a82;
+    --junction: #ff9a3c;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  header {
+    padding: 28px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0d1119 0%, transparent 100%);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #fff;
+  }
+  header h1 span { color: var(--primary); }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .badge-blue { border-color: var(--primary); color: var(--primary); background: var(--primary-dim); }
+  .badge-orange { border-color: var(--junction); color: var(--junction); background: rgba(255,154,60,0.1); }
+  .header-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ── LEGEND ── */
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 14px 40px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .legend-item { display: flex; align-items: center; gap: 7px; }
+  .dot {
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid;
+    flex-shrink: 0;
+  }
+  .line-sample {
+    width: 28px; height: 2px; border-radius: 2px; flex-shrink: 0;
+  }
+  .line-fk { background: var(--primary); }
+  .line-implicit { background: var(--accent2); opacity: 0.6; }
+  .line-self { background: var(--accent4); }
+
+  /* ── TABS ── */
+  .tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 40px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    overflow-x: auto;
+  }
+  .tab {
+    padding: 12px 22px;
+    font-size: 0.73rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    transition: all 0.2s;
+    white-space: nowrap;
+    background: none;
+    border-top: none; border-left: none; border-right: none;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+  /* ── PANEL ── */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── DIAGRAM ── */
+  #diagram-panel {
+    padding: 30px 20px;
+  }
+  .diagram-wrap {
+    position: relative;
+    width: 100%;
+    overflow: auto;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(0,229,255,0.03) 0%, transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(199,125,255,0.03) 0%, transparent 50%);
+  }
+
+  #erd-canvas {
+    position: relative;
+    width: 1380px;
+    height: 920px;
+    margin: 0 auto;
+  }
+
+  /* SVG connections layer */
+  #connections {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* ── TABLE CARDS ── */
+  .tcard {
+    position: absolute;
+    z-index: 2;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+    cursor: default;
+    min-width: 200px;
+  }
+  .tcard:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+    border-color: var(--primary);
+    z-index: 10;
+  }
+  .tcard-head {
+    padding: 9px 13px;
+    border-radius: 9px 9px 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .tcard-name {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    letter-spacing: 0.01em;
+  }
+  .tcard-count {
+    font-size: 0.62rem;
+    opacity: 0.7;
+    font-weight: 400;
+    white-space: nowrap;
+  }
+  .tcard-body {
+    padding: 6px 0 6px;
+  }
+  .tcol {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 12px;
+    font-size: 0.67rem;
+    transition: background 0.15s;
+  }
+  .tcol:hover { background: rgba(255,255,255,0.04); }
+  .tcol-name { color: var(--text); flex: 1; }
+  .tcol-type { color: var(--muted); font-size: 0.6rem; }
+  .key-icon {
+    font-size: 0.6rem;
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .pk { color: var(--accent2); }
+  .fk { color: var(--primary); }
+  .nn { color: var(--muted); font-size: 0.5rem; }
+
+  /* Category colors */
+  .cat-core .tcard-head { background: linear-gradient(90deg, #0f2a36, #0f1d2a); border-bottom: 1px solid rgba(0,229,255,0.25); }
+  .cat-core .tcard-name { color: var(--primary); }
+  .cat-junction .tcard-head { background: linear-gradient(90deg, #291a0a, #1f1408); border-bottom: 1px solid rgba(255,154,60,0.25); }
+  .cat-junction .tcard-name { color: var(--junction); }
+  .cat-activity .tcard-head { background: linear-gradient(90deg, #0f2214, #0a1a0f); border-bottom: 1px solid rgba(107,203,119,0.25); }
+  .cat-activity .tcard-name { color: var(--accent3); }
+  .cat-system .tcard-head { background: linear-gradient(90deg, #1a1020, #14101a); border-bottom: 1px solid rgba(199,125,255,0.2); }
+  .cat-system .tcard-name { color: var(--accent4); opacity: 0.7; }
+
+  /* ── REFERENCE PANEL ── */
+  #reference-panel { padding: 30px 40px; }
+  .ref-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .ref-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .ref-head {
+    padding: 11px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .ref-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .ref-rows { font-size: 0.65rem; color: var(--muted); }
+  table.schema {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.68rem;
+  }
+  table.schema th {
+    padding: 5px 12px;
+    text-align: left;
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    background: var(--surface2);
+  }
+  table.schema td {
+    padding: 4px 12px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .col-pk { color: var(--accent2); }
+  .col-fk { color: var(--primary); }
+
+  /* ── RELATIONSHIPS PANEL ── */
+  #rels-panel { padding: 30px 40px; }
+  .rels-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 14px;
+  }
+  .rel-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .rel-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #fff;
+  }
+  .rel-path {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    flex-wrap: wrap;
+  }
+  .ent {
+    padding: 3px 9px;
+    border-radius: 5px;
+    font-weight: 600;
+    font-size: 0.68rem;
+  }
+  .ent-core { background: var(--primary-dim); color: var(--primary); border: 1px solid rgba(0,229,255,0.3); }
+  .ent-junc { background: rgba(255,154,60,0.1); color: var(--junction); border: 1px solid rgba(255,154,60,0.3); }
+  .ent-act { background: rgba(107,203,119,0.1); color: var(--accent3); border: 1px solid rgba(107,203,119,0.3); }
+  .arrow { color: var(--muted); font-size: 0.8rem; }
+  .rel-type {
+    font-size: 0.63rem;
+    color: var(--muted);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .rel-desc { font-size: 0.68rem; color: var(--muted); line-height: 1.5; }
+
+  /* ── CONCEPTS PANEL ── */
+  #concepts-panel { padding: 30px 40px; }
+  .concepts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .concept-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .concept-icon { font-size: 1.6rem; margin-bottom: 10px; }
+  .concept-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .concept-body { font-size: 0.71rem; color: var(--muted); line-height: 1.65; }
+  .concept-example {
+    margin-top: 10px;
+    padding: 9px 11px;
+    background: var(--surface2);
+    border-radius: 6px;
+    border-left: 3px solid var(--primary);
+    font-size: 0.67rem;
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🎵 <span>song.db</span> — Database Map</h1>
+    <div style="font-size:0.68rem;color:var(--muted);margin-top:4px;">SQLite · Music App · Room Database · v19</div>
+  </div>
+  <div class="header-badges">
+    <span class="badge badge-blue">16 tables</span>
+    <span class="badge badge-orange">10,322 songs · 5,219 artists</span>
+  </div>
+</header>
+
+<!-- LEGEND -->
+<div class="legend">
+  <strong style="color:var(--text);font-size:0.7rem;">LEGEND</strong>
+  <div class="legend-item"><div class="dot" style="border-color:var(--primary);background:var(--primary-dim)"></div>Core entity</div>
+  <div class="legend-item"><div class="dot" style="border-color:var(--junction);background:rgba(255,154,60,0.15)"></div>Junction (M:M bridge)</div>
+  <div class="legend-item"><div class="dot" style="border-color:var(--accent3);background:rgba(107,203,119,0.1)"></div>Activity / tracking</div>
+  <div class="legend-item"><div class="dot" style="border-color:var(--accent4);background:rgba(199,125,255,0.1)"></div>System / metadata</div>
+  <div class="legend-item"><div class="line-sample line-fk"></div>FK constraint (enforced)</div>
+  <div class="legend-item"><div class="line-sample line-implicit"></div>Implicit link (by ID, no FK)</div>
+  <div class="legend-item"><div class="line-sample line-self"></div>Self-referential</div>
+  <div class="legend-item" style="margin-left:auto;">
+    <span style="color:var(--accent2);font-size:0.72rem;">🔑 PK</span>&nbsp;
+    <span style="color:var(--primary);font-size:0.72rem;">🔗 FK</span>&nbsp;
+    <span style="color:var(--muted);font-size:0.72rem;">· optional</span>&nbsp;
+    <span style="color:var(--text);font-size:0.72rem;">! required</span>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('diagram')">ERD Diagram</button>
+  <button class="tab" onclick="switchTab('reference')">Table Reference</button>
+  <button class="tab" onclick="switchTab('rels')">Relationships</button>
+  <button class="tab" onclick="switchTab('concepts')">DB Concepts</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  PANEL 1: DIAGRAM                                       -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div id="diagram-panel" class="panel active">
+<div class="diagram-wrap">
+<div id="erd-canvas">
+
+<!-- SVG layer for connections -->
+<svg id="connections" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="rgba(0,229,255,0.8)"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="rgba(255,154,60,0.8)"/>
+    </marker>
+    <marker id="arrow-yellow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="rgba(255,217,61,0.6)"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="rgba(199,125,255,0.8)"/>
+    </marker>
+  </defs>
+</svg>
+
+<!-- ── CORE ENTITIES ── -->
+
+<!-- SONG — center king -->
+<div class="tcard cat-core" id="t-song" style="left:540px;top:320px;width:230px;">
+  <div class="tcard-head">
+    <span class="tcard-name">song</span>
+    <span class="tcard-count">10,322 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">title</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">duration</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">thumbnailUrl</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">albumId</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">albumName</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">year</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">liked</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">likedDate</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">totalPlayTime</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">inLibrary</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">dateDownload</span><span class="tcol-type">INTEGER</span></div>
+  </div>
+</div>
+
+<!-- ARTIST -->
+<div class="tcard cat-core" id="t-artist" style="left:90px;top:60px;width:220px;">
+  <div class="tcard-head">
+    <span class="tcard-name">artist</span>
+    <span class="tcard-count">5,219 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">name</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">thumbnailUrl</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">channelId</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">songCount</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">lastUpdateTime</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">bookmarkedAt</span><span class="tcol-type">INTEGER</span></div>
+  </div>
+</div>
+
+<!-- ALBUM -->
+<div class="tcard cat-core" id="t-album" style="left:960px;top:60px;width:225px;">
+  <div class="tcard-head">
+    <span class="tcard-name">album</span>
+    <span class="tcard-count">39 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">playlistId</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">title</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">year</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">thumbnailUrl</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">songCount</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">duration</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">lastUpdateTime</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">bookmarkedAt</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">inLibrary</span><span class="tcol-type">INTEGER</span></div>
+  </div>
+</div>
+
+<!-- PLAYLIST -->
+<div class="tcard cat-core" id="t-playlist" style="left:540px;top:700px;width:225px;">
+  <div class="tcard-head">
+    <span class="tcard-name">playlist</span>
+    <span class="tcard-count">4 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">name</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">browseId</span><span class="tcol-type">TEXT</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">createdAt</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">isEditable</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">bookmarkedAt</span><span class="tcol-type">INTEGER</span></div>
+  </div>
+</div>
+
+<!-- ── JUNCTION TABLES ── -->
+
+<!-- song_artist_map -->
+<div class="tcard cat-junction" id="t-song_artist_map" style="left:315px;top:205px;width:200px;">
+  <div class="tcard-head">
+    <span class="tcard-name">song_artist_map</span>
+    <span class="tcard-count">16,504</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">songId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">artistId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">position</span><span class="tcol-type">INTEGER !</span></div>
+  </div>
+</div>
+
+<!-- song_album_map -->
+<div class="tcard cat-junction" id="t-song_album_map" style="left:780px;top:205px;width:200px;">
+  <div class="tcard-head">
+    <span class="tcard-name">song_album_map</span>
+    <span class="tcard-count">324</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">songId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">albumId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">index</span><span class="tcol-type">INTEGER !</span></div>
+  </div>
+</div>
+
+<!-- album_artist_map -->
+<div class="tcard cat-junction" id="t-album_artist_map" style="left:530px;top:60px;width:200px;">
+  <div class="tcard-head">
+    <span class="tcard-name">album_artist_map</span>
+    <span class="tcard-count">65</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">albumId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">artistId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">order</span><span class="tcol-type">INTEGER !</span></div>
+  </div>
+</div>
+
+<!-- playlist_song_map -->
+<div class="tcard cat-junction" id="t-playlist_song_map" style="left:540px;top:560px;width:210px;">
+  <div class="tcard-head">
+    <span class="tcard-name">playlist_song_map</span>
+    <span class="tcard-count">873</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon fk">🔗</span><span class="tcol-name">playlistId</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon fk">🔗</span><span class="tcol-name">songId</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">position</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">setVideoId</span><span class="tcol-type">TEXT</span></div>
+  </div>
+</div>
+
+<!-- related_song_map -->
+<div class="tcard cat-junction" id="t-related_song_map" style="left:200px;top:430px;width:215px;">
+  <div class="tcard-head">
+    <span class="tcard-name">related_song_map</span>
+    <span class="tcard-count">39,021</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon fk">🔗</span><span class="tcol-name">songId</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon fk">🔗</span><span class="tcol-name">relatedSongId</span><span class="tcol-type">TEXT !</span></div>
+  </div>
+</div>
+
+<!-- ── ACTIVITY / TRACKING ── -->
+
+<!-- event -->
+<div class="tcard cat-activity" id="t-event" style="left:820px;top:460px;width:205px;">
+  <div class="tcard-head">
+    <span class="tcard-name">event</span>
+    <span class="tcard-count">2,012 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon fk">🔗</span><span class="tcol-name">songId</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">timestamp</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">playTime</span><span class="tcol-type">INTEGER !</span></div>
+  </div>
+</div>
+
+<!-- lyrics -->
+<div class="tcard cat-activity" id="t-lyrics" style="left:92px;top:560px;width:185px;">
+  <div class="tcard-head">
+    <span class="tcard-name">lyrics</span>
+    <span class="tcard-count">32 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">lyrics</span><span class="tcol-type">TEXT !</span></div>
+  </div>
+</div>
+
+<!-- format -->
+<div class="tcard cat-activity" id="t-format" style="left:1050px;top:320px;width:210px;">
+  <div class="tcard-head">
+    <span class="tcard-name">format</span>
+    <span class="tcard-count">1,575 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">itag</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">mimeType</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">codecs</span><span class="tcol-type">TEXT !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">bitrate</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">sampleRate</span><span class="tcol-type">INTEGER</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">contentLength</span><span class="tcol-type">INTEGER !</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">loudnessDb</span><span class="tcol-type">REAL</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">playbackUrl</span><span class="tcol-type">TEXT</span></div>
+  </div>
+</div>
+
+<!-- playCount -->
+<div class="tcard cat-activity" id="t-playCount" style="left:30px;top:740px;width:195px;">
+  <div class="tcard-head">
+    <span class="tcard-name">playCount</span>
+    <span class="tcard-count">0 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">song</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">year</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">month</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">count</span><span class="tcol-type">INTEGER !</span></div>
+  </div>
+</div>
+
+<!-- ── SYSTEM ── -->
+
+<!-- search_history -->
+<div class="tcard cat-system" id="t-search_history" style="left:870px;top:740px;width:200px;">
+  <div class="tcard-head">
+    <span class="tcard-name">search_history</span>
+    <span class="tcard-count">166 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">query</span><span class="tcol-type">TEXT !</span></div>
+  </div>
+</div>
+
+<!-- android_metadata -->
+<div class="tcard cat-system" id="t-android_metadata" style="left:1100px;top:680px;width:200px;">
+  <div class="tcard-head">
+    <span class="tcard-name">android_metadata</span>
+    <span class="tcard-count">1 row</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">locale</span><span class="tcol-type">TEXT</span></div>
+  </div>
+</div>
+
+<!-- room_master_table -->
+<div class="tcard cat-system" id="t-room_master" style="left:1100px;top:790px;width:200px;">
+  <div class="tcard-head">
+    <span class="tcard-name">room_master_table</span>
+    <span class="tcard-count">1 row</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">id</span><span class="tcol-type">INTEGER PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">identity_hash</span><span class="tcol-type">TEXT</span></div>
+  </div>
+</div>
+
+<!-- set_video_id -->
+<div class="tcard cat-system" id="t-set_video_id" style="left:300px;top:750px;width:185px;">
+  <div class="tcard-head">
+    <span class="tcard-name">set_video_id</span>
+    <span class="tcard-count">0 rows</span>
+  </div>
+  <div class="tcard-body">
+    <div class="tcol"><span class="key-icon pk">🔑</span><span class="tcol-name">videoId</span><span class="tcol-type">TEXT PK</span></div>
+    <div class="tcol"><span class="key-icon"></span><span class="tcol-name">setVideoId</span><span class="tcol-type">TEXT</span></div>
+  </div>
+</div>
+
+</div><!-- /erd-canvas -->
+</div><!-- /diagram-wrap -->
+
+<div style="padding:10px 40px 5px;font-size:0.65rem;color:var(--muted);">
+  💡 Hover over any table card to highlight it. Scroll horizontally to see all tables. Lines show database relationships.
+</div>
+</div><!-- /diagram-panel -->
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  PANEL 2: TABLE REFERENCE                               -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div id="reference-panel" class="panel">
+<div class="ref-grid">
+
+  <!-- SONG -->
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--primary)">
+      <div>
+        <div class="ref-title" style="color:var(--primary)">song</div>
+        <div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Core entity — all songs</div>
+      </div>
+      <span class="ref-rows">10,322 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th><th>Note</th></tr>
+      <tr><td class="col-pk">id</td><td>TEXT</td><td>PK</td><td>YouTube video ID</td></tr>
+      <tr><td>title</td><td>TEXT</td><td>!</td><td>Song title</td></tr>
+      <tr><td>duration</td><td>INTEGER</td><td>!</td><td>Seconds</td></tr>
+      <tr><td>thumbnailUrl</td><td>TEXT</td><td>—</td><td>Cover image</td></tr>
+      <tr><td>albumId</td><td>TEXT</td><td>—</td><td>Denormalized ref to album</td></tr>
+      <tr><td>albumName</td><td>TEXT</td><td>—</td><td>Denormalized album name</td></tr>
+      <tr><td>year / date</td><td>INTEGER</td><td>—</td><td>Release info</td></tr>
+      <tr><td>liked</td><td>INTEGER</td><td>!</td><td>0 / 1 boolean</td></tr>
+      <tr><td>likedDate</td><td>INTEGER</td><td>—</td><td>Unix timestamp</td></tr>
+      <tr><td>totalPlayTime</td><td>INTEGER</td><td>!</td><td>Accumulated ms</td></tr>
+      <tr><td>inLibrary</td><td>INTEGER</td><td>—</td><td>Saved to library?</td></tr>
+      <tr><td>dateDownload</td><td>INTEGER</td><td>—</td><td>Offline download time</td></tr>
+    </table>
+  </div>
+
+  <!-- ARTIST -->
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--primary)">
+      <div><div class="ref-title" style="color:var(--primary)">artist</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Core entity — musicians</div></div>
+      <span class="ref-rows">5,219 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th><th>Note</th></tr>
+      <tr><td class="col-pk">id</td><td>TEXT</td><td>PK</td><td>YouTube channel/artist ID</td></tr>
+      <tr><td>name</td><td>TEXT</td><td>!</td><td>Display name</td></tr>
+      <tr><td>thumbnailUrl</td><td>TEXT</td><td>—</td><td>Profile image</td></tr>
+      <tr><td>channelId</td><td>TEXT</td><td>—</td><td>YT channel link</td></tr>
+      <tr><td>songCount</td><td>INTEGER</td><td>!</td><td>Cached count</td></tr>
+      <tr><td>lastUpdateTime</td><td>INTEGER</td><td>!</td><td>Cache refresh time</td></tr>
+      <tr><td>bookmarkedAt</td><td>INTEGER</td><td>—</td><td>Followed/saved time</td></tr>
+    </table>
+  </div>
+
+  <!-- ALBUM -->
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--primary)">
+      <div><div class="ref-title" style="color:var(--primary)">album</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Core entity — albums</div></div>
+      <span class="ref-rows">39 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th><th>Note</th></tr>
+      <tr><td class="col-pk">id</td><td>TEXT</td><td>PK</td><td>Album ID</td></tr>
+      <tr><td>playlistId</td><td>TEXT</td><td>—</td><td>YT browse playlist</td></tr>
+      <tr><td>title</td><td>TEXT</td><td>!</td><td>Album name</td></tr>
+      <tr><td>year</td><td>INTEGER</td><td>—</td><td>Release year</td></tr>
+      <tr><td>thumbnailUrl</td><td>TEXT</td><td>—</td><td>Cover art</td></tr>
+      <tr><td>songCount</td><td>INTEGER</td><td>!</td><td>Cached count</td></tr>
+      <tr><td>duration</td><td>INTEGER</td><td>!</td><td>Total album seconds</td></tr>
+      <tr><td>bookmarkedAt</td><td>INTEGER</td><td>—</td><td>Saved timestamp</td></tr>
+      <tr><td>inLibrary</td><td>INTEGER</td><td>—</td><td>In user library?</td></tr>
+    </table>
+  </div>
+
+  <!-- PLAYLIST -->
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--primary)">
+      <div><div class="ref-title" style="color:var(--primary)">playlist</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Core entity — playlists</div></div>
+      <span class="ref-rows">4 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th><th>Note</th></tr>
+      <tr><td class="col-pk">id</td><td>TEXT</td><td>PK</td><td>Playlist ID</td></tr>
+      <tr><td>name</td><td>TEXT</td><td>!</td><td>Playlist name</td></tr>
+      <tr><td>browseId</td><td>TEXT</td><td>—</td><td>YT browse endpoint</td></tr>
+      <tr><td>createdAt</td><td>INTEGER</td><td>—</td><td>Unix timestamp</td></tr>
+      <tr><td>isEditable</td><td>INTEGER</td><td>!</td><td>Default: true</td></tr>
+      <tr><td>bookmarkedAt</td><td>INTEGER</td><td>—</td><td>Saved timestamp</td></tr>
+      <tr><td>remoteSongCount</td><td>INTEGER</td><td>—</td><td>Remote count</td></tr>
+      <tr><td>playEndpointParams</td><td>TEXT</td><td>—</td><td>API param blob</td></tr>
+    </table>
+  </div>
+
+  <!-- JUNCTION TABLES -->
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--junction)">
+      <div><div class="ref-title" style="color:var(--junction)">song_artist_map</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Junction — song ↔ artist (M:M)</div></div>
+      <span class="ref-rows">16,504 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">songId</td><td>TEXT</td><td>PK + FK → song</td></tr>
+      <tr><td class="col-pk">artistId</td><td>TEXT</td><td>PK + FK → artist</td></tr>
+      <tr><td>position</td><td>INTEGER</td><td>! (artist order)</td></tr>
+    </table>
+  </div>
+
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--junction)">
+      <div><div class="ref-title" style="color:var(--junction)">song_album_map</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Junction — song ↔ album (M:M)</div></div>
+      <span class="ref-rows">324 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">songId</td><td>TEXT</td><td>PK + FK → song</td></tr>
+      <tr><td class="col-pk">albumId</td><td>TEXT</td><td>PK + FK → album</td></tr>
+      <tr><td>index</td><td>INTEGER</td><td>! (track number)</td></tr>
+    </table>
+  </div>
+
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--junction)">
+      <div><div class="ref-title" style="color:var(--junction)">album_artist_map</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Junction — album ↔ artist (M:M)</div></div>
+      <span class="ref-rows">65 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">albumId</td><td>TEXT</td><td>PK + FK → album</td></tr>
+      <tr><td class="col-pk">artistId</td><td>TEXT</td><td>PK + FK → artist</td></tr>
+      <tr><td>order</td><td>INTEGER</td><td>! (credit order)</td></tr>
+    </table>
+  </div>
+
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--junction)">
+      <div><div class="ref-title" style="color:var(--junction)">playlist_song_map</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Junction — playlist ↔ song (M:M)</div></div>
+      <span class="ref-rows">873 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">id</td><td>INTEGER</td><td>PK (auto)</td></tr>
+      <tr><td class="col-fk">playlistId</td><td>TEXT</td><td>FK → playlist</td></tr>
+      <tr><td class="col-fk">songId</td><td>TEXT</td><td>FK → song</td></tr>
+      <tr><td>position</td><td>INTEGER</td><td>! (order)</td></tr>
+      <tr><td>setVideoId</td><td>TEXT</td><td>— (YT token)</td></tr>
+    </table>
+  </div>
+
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--accent4)">
+      <div><div class="ref-title" style="color:var(--accent4)">related_song_map</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Self-join — song ↔ song (M:M)</div></div>
+      <span class="ref-rows">39,021 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">id</td><td>INTEGER</td><td>PK (auto)</td></tr>
+      <tr><td class="col-fk">songId</td><td>TEXT</td><td>FK → song (source)</td></tr>
+      <tr><td class="col-fk">relatedSongId</td><td>TEXT</td><td>FK → song (target)</td></tr>
+    </table>
+  </div>
+
+  <!-- ACTIVITY TABLES -->
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--accent3)">
+      <div><div class="ref-title" style="color:var(--accent3)">event</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Activity — play events log</div></div>
+      <span class="ref-rows">2,012 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">id</td><td>INTEGER</td><td>PK (auto)</td></tr>
+      <tr><td class="col-fk">songId</td><td>TEXT</td><td>FK → song</td></tr>
+      <tr><td>timestamp</td><td>INTEGER</td><td>! (Unix ms)</td></tr>
+      <tr><td>playTime</td><td>INTEGER</td><td>! (ms played)</td></tr>
+    </table>
+  </div>
+
+  <div class="ref-card">
+    <div class="ref-head" style="border-left:4px solid var(--accent3)">
+      <div><div class="ref-title" style="color:var(--accent3)">format</div><div style="font-size:0.63rem;color:var(--muted);margin-top:2px;">Activity — audio stream formats</div></div>
+      <span class="ref-rows">1,575 rows</span>
+    </div>
+    <table class="schema">
+      <tr><th>Column</th><th>Type</th><th>Key</th></tr>
+      <tr><td class="col-pk">id</td><td>TEXT</td><td>PK (= song.id)</td></tr>
+      <tr><td>itag</td><td>INTEGER</td><td>! (YT format code)</td></tr>
+      <tr><td>mimeType</td><td>TEXT</td><td>! (audio/webm)</td></tr>
+      <tr><td>codecs</td><td>TEXT</td><td>! (opus/mp4a)</td></tr>
+      <tr><td>bitrate</td><td>INTEGER</td><td>! (bps)</td></tr>
+      <tr><td>sampleRate</td><td>INTEGER</td><td>— (Hz)</td></tr>
+      <tr><td>contentLength</td><td>INTEGER</td><td>! (bytes)</td></tr>
+      <tr><td>loudnessDb</td><td>REAL</td><td>— (replay gain)</td></tr>
+      <tr><td>playbackUrl</td><td>TEXT</td><td>— (stream URL)</td></tr>
+    </table>
+  </div>
+
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  PANEL 3: RELATIONSHIPS                                 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div id="rels-panel" class="panel">
+<div style="margin-bottom:20px;">
+  <div style="font-size:0.8rem;color:var(--muted);line-height:1.6;">
+    This database uses the <strong style="color:var(--text)">Many-to-Many (M:M)</strong> pattern extensively via <em>junction tables</em> — a core concept in relational database design. Here's every relationship explained.
+  </div>
+</div>
+<div class="rels-grid">
+
+  <div class="rel-card">
+    <div class="rel-title">Song ↔ Artist</div>
+    <div class="rel-path">
+      <span class="ent ent-core">song</span><span class="arrow">──</span>
+      <span class="ent ent-junc">song_artist_map</span><span class="arrow">──</span>
+      <span class="ent ent-core">artist</span>
+      <span class="rel-type">M : M</span>
+    </div>
+    <div class="rel-desc">A song can have multiple artists (features, collabs). An artist can have many songs. The junction stores <code>position</code> to order primary vs. featured artists.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Song ↔ Album</div>
+    <div class="rel-path">
+      <span class="ent ent-core">song</span><span class="arrow">──</span>
+      <span class="ent ent-junc">song_album_map</span><span class="arrow">──</span>
+      <span class="ent ent-core">album</span>
+      <span class="rel-type">M : M</span>
+    </div>
+    <div class="rel-desc">A song can appear on multiple albums (deluxe editions, compilations). An album contains many songs. <code>index</code> is the track number.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Album ↔ Artist</div>
+    <div class="rel-path">
+      <span class="ent ent-core">album</span><span class="arrow">──</span>
+      <span class="ent ent-junc">album_artist_map</span><span class="arrow">──</span>
+      <span class="ent ent-core">artist</span>
+      <span class="rel-type">M : M</span>
+    </div>
+    <div class="rel-desc">Albums can have multiple credited artists. An artist can release many albums. <code>order</code> defines credit ordering (lead artist first).</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Playlist ↔ Song</div>
+    <div class="rel-path">
+      <span class="ent ent-core">playlist</span><span class="arrow">──</span>
+      <span class="ent ent-junc">playlist_song_map</span><span class="arrow">──</span>
+      <span class="ent ent-core">song</span>
+      <span class="rel-type">M : M</span>
+    </div>
+    <div class="rel-desc">A playlist contains many songs; a song can be in many playlists. <code>position</code> preserves custom ordering. Has its own surrogate <code>id</code> (not composite PK) to support YouTube's <code>setVideoId</code> token.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Song ↔ Song (self-join)</div>
+    <div class="rel-path">
+      <span class="ent ent-core">song</span><span class="arrow">──</span>
+      <span class="ent ent-junc">related_song_map</span><span class="arrow">──</span>
+      <span class="ent ent-core">song</span>
+      <span class="rel-type">Self M:M</span>
+    </div>
+    <div class="rel-desc">A <strong>self-referential</strong> relationship. Both <code>songId</code> and <code>relatedSongId</code> point back to <code>song.id</code>. This is how "You may also like" recommendation data is stored. With 39,021 rows it's the largest table.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Event → Song</div>
+    <div class="rel-path">
+      <span class="ent ent-act">event</span><span class="arrow">──FK──▶</span>
+      <span class="ent ent-core">song</span>
+      <span class="rel-type">M : 1</span>
+    </div>
+    <div class="rel-desc">Many play events belong to one song. Each row records a single listening session: when it happened (<code>timestamp</code>) and how long (<code>playTime</code>). Used for listening history analytics.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Format → Song (implicit)</div>
+    <div class="rel-path">
+      <span class="ent ent-act">format</span><span class="arrow">── id ──▶</span>
+      <span class="ent ent-core">song</span>
+      <span class="rel-type">1 : 1 *</span>
+    </div>
+    <div class="rel-desc">No explicit FK defined, but <code>format.id = song.id</code> by convention. Stores the cached audio stream format (codec, bitrate, URL) for offline/cached playback. The absence of an FK means deletion won't cascade automatically — a design tradeoff.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">Lyrics → Song (implicit)</div>
+    <div class="rel-path">
+      <span class="ent ent-act">lyrics</span><span class="arrow">── id ──▶</span>
+      <span class="ent ent-core">song</span>
+      <span class="rel-type">1 : 1 *</span>
+    </div>
+    <div class="rel-desc">No FK constraint, but <code>lyrics.id</code> maps to <code>song.id</code>. Only 32 songs have lyrics saved — lyrics are fetched on-demand and cached. This is a classic <strong>optional 1:1 extension</strong> pattern.</div>
+  </div>
+
+  <div class="rel-card">
+    <div class="rel-title">PlayCount → Song (implicit)</div>
+    <div class="rel-path">
+      <span class="ent ent-act">playCount</span><span class="arrow">── song ──▶</span>
+      <span class="ent ent-core">song</span>
+      <span class="rel-type">M : 1 *</span>
+    </div>
+    <div class="rel-desc">Composite PK: (<code>song, year, month</code>). Designed to store monthly play stats per song. Currently empty — suggests this feature was planned but not yet active. The <code>event</code> table currently handles play tracking instead.</div>
+  </div>
+
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  PANEL 4: DB CONCEPTS                                   -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div id="concepts-panel" class="panel">
+<div class="concepts-grid">
+
+  <div class="concept-card">
+    <div class="concept-icon">🔑</div>
+    <div class="concept-title">Primary Key (PK)</div>
+    <div class="concept-body">A column (or combination of columns) that <strong>uniquely identifies</strong> every row in a table. No two rows can share the same PK. No PK can be NULL.</div>
+    <div class="concept-example">In <code>song</code>: <code>id = "dQw4w9WgXcQ"</code> (YouTube video ID) — each song gets exactly one unique ID.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">🔗</div>
+    <div class="concept-title">Foreign Key (FK)</div>
+    <div class="concept-body">A column that <strong>references</strong> the PK of another table, creating a link between them. Enforces <em>referential integrity</em> — you can't add a song to an artist that doesn't exist.</div>
+    <div class="concept-example">In <code>event</code>: <code>songId</code> is an FK to <code>song.id</code>. If a song is deleted, all its events are deleted too (CASCADE).</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">🔀</div>
+    <div class="concept-title">Junction Table (M:M)</div>
+    <div class="concept-body">When two entities have a Many-to-Many relationship, you can't store it directly. A <strong>junction table</strong> sits in the middle, holding pairs of FKs. It breaks M:M into two 1:M relationships.</div>
+    <div class="concept-example"><code>song_artist_map</code> links songs and artists. One row = "song X has artist Y at position Z." This is the most common pattern in this database.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">🔄</div>
+    <div class="concept-title">Self-Referential Relationship</div>
+    <div class="concept-body">A table where a FK points back to the <strong>same table</strong>. Used to model hierarchies, graphs, or networks within one entity type.</div>
+    <div class="concept-example"><code>related_song_map</code>: both <code>songId</code> and <code>relatedSongId</code> reference <code>song.id</code>. This represents "Song A is related to Song B" — a graph of songs.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">⚡</div>
+    <div class="concept-title">CASCADE Delete</div>
+    <div class="concept-body">When a parent row is deleted, <strong>all child rows</strong> referencing it are automatically deleted too. This keeps the database consistent without manual cleanup.</div>
+    <div class="concept-example">Delete a song → its rows in <code>song_artist_map</code>, <code>event</code>, <code>playlist_song_map</code>, and <code>related_song_map</code> are all automatically removed.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">🧱</div>
+    <div class="concept-title">Composite Primary Key</div>
+    <div class="concept-body">A PK made of <strong>two or more columns together</strong>. The uniqueness constraint applies to the combination, not individual columns.</div>
+    <div class="concept-example">In <code>song_artist_map</code>: PK is <code>(songId, artistId)</code> together. The same artist can appear on many songs, and a song can have many artists — but each specific pair is unique.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">📦</div>
+    <div class="concept-title">Denormalization</div>
+    <div class="concept-body">Intentionally storing <strong>redundant data</strong> to improve read speed — at the cost of potential inconsistency. The opposite of normalization.</div>
+    <div class="concept-example"><code>song.albumName</code> duplicates <code>album.title</code>. If the album title changed, you'd need to update both places. But it avoids a JOIN when just displaying the song.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">🔌</div>
+    <div class="concept-title">Implicit Relationship (no FK)</div>
+    <div class="concept-body">Tables linked <strong>by convention</strong> (matching IDs) rather than a formal FK constraint. Faster to write, but the database won't enforce integrity for you.</div>
+    <div class="concept-example"><code>format.id</code> and <code>lyrics.id</code> both equal <code>song.id</code> — but there's no FK declared, so deleting a song won't clean up its format or lyrics rows automatically.</div>
+  </div>
+
+  <div class="concept-card">
+    <div class="concept-icon">🏛️</div>
+    <div class="concept-title">Room Database (Android)</div>
+    <div class="concept-body">This is an <strong>Android Room</strong> database — Google's SQLite wrapper. <code>room_master_table</code> stores a schema hash for migration detection. <code>android_metadata</code> holds the device locale.</div>
+    <div class="concept-example">The <code>identity_hash</code> in <code>room_master_table</code> changes whenever the schema changes, forcing the app to run database migration code.</div>
+  </div>
+
+</div>
+</div>
+
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(name + '-panel').classList.add('active');
+  event.target.classList.add('active');
+}
+
+// Draw SVG connections after DOM is ready
+window.addEventListener('load', () => {
+  const svg = document.getElementById('connections');
+  const canvas = document.getElementById('erd-canvas');
+
+  function getCenter(el) {
+    const r = el.getBoundingClientRect();
+    const cr = canvas.getBoundingClientRect();
+    return {
+      x: r.left - cr.left + r.width / 2,
+      y: r.top - cr.top + r.height / 2,
+      top:    { x: r.left - cr.left + r.width / 2, y: r.top - cr.top },
+      bottom: { x: r.left - cr.left + r.width / 2, y: r.bottom - cr.top },
+      left:   { x: r.left - cr.left,                y: r.top - cr.top + r.height / 2 },
+      right:  { x: r.right - cr.left,               y: r.top - cr.top + r.height / 2 },
+    };
+  }
+
+  function curve(a, b) {
+    const dx = (b.x - a.x) * 0.4;
+    return `M${a.x},${a.y} C${a.x+dx},${a.y} ${b.x-dx},${b.y} ${b.x},${b.y}`;
+  }
+
+  function addLine(id1, port1, id2, port2, color, dash, marker) {
+    const e1 = document.getElementById(id1);
+    const e2 = document.getElementById(id2);
+    if (!e1 || !e2) return;
+    const c1 = getCenter(e1)[port1];
+    const c2 = getCenter(e2)[port2];
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', curve(c1, c2));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', '1.5');
+    if (dash) path.setAttribute('stroke-dasharray', '5,4');
+    if (marker) path.setAttribute('marker-end', `url(#${marker})`);
+    path.setAttribute('opacity', '0.7');
+    svg.appendChild(path);
+  }
+
+  // ── JUNCTION CONNECTIONS (solid orange/blue) ──
+  // song_artist_map ↔ song
+  addLine('t-song_artist_map','right','t-song','left','rgba(255,154,60,0.8)',false,'arrow-orange');
+  // song_artist_map ↔ artist
+  addLine('t-song_artist_map','top','t-artist','bottom','rgba(255,154,60,0.8)',false,'arrow-orange');
+
+  // song_album_map ↔ song
+  addLine('t-song_album_map','left','t-song','right','rgba(255,154,60,0.8)',false,'arrow-orange');
+  // song_album_map ↔ album
+  addLine('t-song_album_map','top','t-album','bottom','rgba(255,154,60,0.8)',false,'arrow-orange');
+
+  // album_artist_map ↔ album
+  addLine('t-album_artist_map','right','t-album','left','rgba(255,154,60,0.8)',false,'arrow-orange');
+  // album_artist_map ↔ artist
+  addLine('t-album_artist_map','left','t-artist','right','rgba(255,154,60,0.8)',false,'arrow-orange');
+
+  // playlist_song_map ↔ song (FK)
+  addLine('t-playlist_song_map','top','t-song','bottom','rgba(0,229,255,0.8)',false,'arrow-blue');
+  // playlist_song_map ↔ playlist (FK)
+  addLine('t-playlist_song_map','bottom','t-playlist','top','rgba(0,229,255,0.8)',false,'arrow-blue');
+
+  // related_song_map ↔ song (self-ref, purple)
+  addLine('t-related_song_map','right','t-song','left','rgba(199,125,255,0.8)',false,'arrow-purple');
+
+  // ── ACTIVITY CONNECTIONS ──
+  // event ↔ song (FK, blue)
+  addLine('t-event','left','t-song','right','rgba(0,229,255,0.8)',false,'arrow-blue');
+
+  // format ↔ song (implicit, dashed yellow)
+  addLine('t-format','left','t-song','right','rgba(255,217,61,0.7)',true,'arrow-yellow');
+
+  // lyrics ↔ song (implicit, dashed yellow)
+  addLine('t-lyrics','right','t-song','left','rgba(255,217,61,0.7)',true,'arrow-yellow');
+});
+</script>
+</body>
+</html>

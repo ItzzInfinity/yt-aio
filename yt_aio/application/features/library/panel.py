@@ -7,8 +7,10 @@ Writes: deletes the cached rows the operator selected, and clears the download r
         link to them. The download history itself is never destroyed.
 Runs:   nothing (dev_guide.md 5, Pattern E).
 
-The cache is the large table in this database, so every read is paged and filtered in
-SQL. Nothing here loads the whole table into memory.
+The cache is the large table in this database, so every read is paged, filtered and
+sorted in SQL. Nothing here loads the whole table into memory, and clicking a column
+heading re-runs the query rather than reordering the page on screen: sorting one page
+out of thousands of rows would look like a sort and behave like a bug.
 """
 
 from __future__ import annotations
@@ -16,14 +18,26 @@ from __future__ import annotations
 from typing import Any
 
 from ...context import AppContext
-from ...db.queries import database_stats, delete_videos, fetch_sources, fetch_videos
+from ...db.queries import (
+    DEFAULT_LIBRARY_SORT,
+    database_stats,
+    delete_videos,
+    fetch_channels,
+    fetch_sources,
+    fetch_videos,
+)
 from ...ui.qt import (
+    ALIGN_RIGHT,
+    CASE_INSENSITIVE,
     CHECKED,
     ITEM_FLAGS,
+    MATCH_CONTAINS,
     MB_NO,
     MB_YES,
     NO_EDIT,
     SELECT_ROWS,
+    SORT_ASCENDING,
+    SORT_DESCENDING,
     UNCHECKED,
     USER_ROLE,
     QCheckBox,
@@ -43,7 +57,22 @@ from ...ui.qt import (
 from ...ui.widgets import RecordTable, muted
 from ...utils.video_info_extractor import format_duration
 
-HEADERS = ["", "Video ID", "Title", "Channel", "Duration", "Uploaded", "Cached", "Metadata", "Downloads"]
+# Heading, and the sort key queries.py accepts for it. None means the column cannot be
+# sorted, which is only ever the tick box.
+COLUMNS: list[tuple[str, str | None]] = [
+    ("", None),
+    ("Video ID", "video_id"),
+    ("Title", "title"),
+    ("Channel", "channel_name"),
+    ("Duration", "duration"),
+    ("Uploaded", "upload_date"),
+    ("Cached", "cached_at"),
+    ("Metadata", "is_full_metadata"),
+    ("Downloads", "download_count"),
+]
+HEADERS = [heading for heading, _ in COLUMNS]
+NUMERIC_COLUMNS = {4, 8}
+
 COMPLETENESS = {
     "Everything": "all",
     "Full metadata only": "full",
@@ -51,6 +80,9 @@ COMPLETENESS = {
     "Downloaded": "downloaded",
     "Never downloaded": "never downloaded",
 }
+
+# Upper bound in minutes. Zero means no bound, which is why the spin boxes start there.
+MAX_FILTER_MINUTES = 600
 
 
 class LibraryPanel(QWidget):
@@ -66,6 +98,8 @@ class LibraryPanel(QWidget):
         self._offset = 0
         self._total = 0
         self._loaded_once = False
+        self._sort_key = DEFAULT_LIBRARY_SORT
+        self._sort_descending = True
 
         # ---- 2. widgets
         self.search_input = QLineEdit()
@@ -73,11 +107,31 @@ class LibraryPanel(QWidget):
         self.source_select = QComboBox()
         self.completeness_select = QComboBox()
         self.completeness_select.addItems(list(COMPLETENESS))
+
+        # Editable so a long channel list can be typed through rather than scrolled.
+        self.channel_select = QComboBox()
+        self.channel_select.setEditable(True)
+        self.channel_select.setMinimumWidth(170)
+        completer = self.channel_select.completer()
+        if completer is not None:
+            completer.setCaseSensitivity(CASE_INSENSITIVE)
+            completer.setFilterMode(MATCH_CONTAINS)
+
+        self.min_minutes = QSpinBox()
+        self.min_minutes.setRange(0, MAX_FILTER_MINUTES)
+        self.min_minutes.setSuffix(" min")
+        self.min_minutes.setToolTip("Shortest duration to show. Zero means no lower bound.")
+        self.max_minutes = QSpinBox()
+        self.max_minutes.setRange(0, MAX_FILTER_MINUTES)
+        self.max_minutes.setSuffix(" min")
+        self.max_minutes.setToolTip("Longest duration to show. Zero means no upper bound.")
+
         self.page_size = QSpinBox()
         self.page_size.setRange(10, 2000)
         self.page_size.setSingleStep(50)
         self.page_size.setValue(200)
         self.refresh_button = QPushButton("Refresh")
+        self.clear_filters_button = QPushButton("Clear filters")
 
         self.select_all_box = QCheckBox("Select all on this page")
         self.delete_button = QPushButton("Delete selected")
@@ -89,19 +143,37 @@ class LibraryPanel(QWidget):
         self.table = RecordTable(HEADERS)
         self.table.setSelectionBehavior(SELECT_ROWS)
         self.table.setEditTriggers(NO_EDIT)
+        header = self.table.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
 
-        # ---- 3. layout
+        # ---- 3. layout. Two rows: what to match, then how much of it to show.
         filter_box = QGroupBox("Filters")
-        filter_row = QHBoxLayout(filter_box)
-        filter_row.addWidget(QLabel("Search"))
-        filter_row.addWidget(self.search_input, 1)
-        filter_row.addWidget(QLabel("Source"))
-        filter_row.addWidget(self.source_select)
-        filter_row.addWidget(QLabel("Show"))
-        filter_row.addWidget(self.completeness_select)
-        filter_row.addWidget(QLabel("Rows"))
-        filter_row.addWidget(self.page_size)
-        filter_row.addWidget(self.refresh_button)
+        filter_column = QVBoxLayout(filter_box)
+
+        first_row = QHBoxLayout()
+        first_row.addWidget(QLabel("Search"))
+        first_row.addWidget(self.search_input, 1)
+        first_row.addWidget(QLabel("Channel"))
+        first_row.addWidget(self.channel_select)
+        first_row.addWidget(QLabel("Source"))
+        first_row.addWidget(self.source_select)
+
+        second_row = QHBoxLayout()
+        second_row.addWidget(QLabel("Duration"))
+        second_row.addWidget(self.min_minutes)
+        second_row.addWidget(QLabel("to"))
+        second_row.addWidget(self.max_minutes)
+        second_row.addWidget(QLabel("Show"))
+        second_row.addWidget(self.completeness_select)
+        second_row.addWidget(QLabel("Rows"))
+        second_row.addWidget(self.page_size)
+        second_row.addStretch(1)
+        second_row.addWidget(self.clear_filters_button)
+        second_row.addWidget(self.refresh_button)
+
+        filter_column.addLayout(first_row)
+        filter_column.addLayout(second_row)
 
         action_row = QHBoxLayout()
         action_row.addWidget(self.select_all_box)
@@ -119,10 +191,15 @@ class LibraryPanel(QWidget):
 
         # ---- 4. signals
         self.refresh_button.clicked.connect(self._reload)
+        self.clear_filters_button.clicked.connect(self._clear_filters)
         self.search_input.returnPressed.connect(self._reset_and_reload)
         self.source_select.currentIndexChanged.connect(self._reset_and_reload)
         self.completeness_select.currentTextChanged.connect(self._reset_and_reload)
+        self.channel_select.currentTextChanged.connect(self._reset_and_reload)
+        self.min_minutes.valueChanged.connect(self._reset_and_reload)
+        self.max_minutes.valueChanged.connect(self._reset_and_reload)
         self.page_size.valueChanged.connect(self._reset_and_reload)
+        header.sectionClicked.connect(self._sort_by_column)
         self.select_all_box.toggled.connect(self._toggle_all)
         self.delete_button.clicked.connect(self._delete_selected)
         self.prev_button.clicked.connect(self._previous_page)
@@ -132,12 +209,14 @@ class LibraryPanel(QWidget):
         # constructor never touches the database.
         self.delete_button.setEnabled(False)
         self._update_page_buttons()
+        self._show_sort_indicator()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().showEvent(event)
         if not self._loaded_once:
             self._loaded_once = True
             self._load_sources()
+            self._load_channels()
             self._reload()
 
     # ------------------------------------------------------------------ helpers
@@ -155,8 +234,37 @@ class LibraryPanel(QWidget):
             self.source_select.addItem(f"{label} [{kind}]" if kind else str(label), source["id"])
         self.source_select.blockSignals(False)
 
+    def _load_channels(self) -> None:
+        """Fill the channel drop-down from what the cache actually holds."""
+        try:
+            channels = fetch_channels(self._ctx.db_path)
+        except Exception:
+            channels = []
+        current = self.channel_select.currentText()
+        self.channel_select.blockSignals(True)
+        self.channel_select.clear()
+        self.channel_select.addItem("")
+        self.channel_select.addItems(channels)
+        self.channel_select.setCurrentText(current)
+        self.channel_select.blockSignals(False)
+        self.channel_select.lineEdit().setPlaceholderText(f"Any of {len(channels)} channel(s)")
+
     def _selected_source_id(self) -> int | None:
         return self.source_select.currentData()
+
+    def _duration_bounds(self) -> tuple[int | None, int | None]:
+        """Minutes on screen, seconds in the query. Zero on either end means unbounded."""
+        low = self.min_minutes.value() * 60 or None
+        high = self.max_minutes.value() * 60 or None
+        return low, high
+
+    def _show_sort_indicator(self) -> None:
+        for index, (_, key) in enumerate(COLUMNS):
+            if key == self._sort_key:
+                self.table.horizontalHeader().setSortIndicator(
+                    index, SORT_DESCENDING if self._sort_descending else SORT_ASCENDING
+                )
+                return
 
     def _update_page_buttons(self) -> None:
         self.prev_button.setEnabled(self._offset > 0)
@@ -190,9 +298,13 @@ class LibraryPanel(QWidget):
                 str(record.get("download_count") or 0),
             ]
             for column_index, text in enumerate(cells, start=1):
-                self.table.setItem(row_index, column_index, QTableWidgetItem(str(text)))
+                cell = QTableWidgetItem(str(text))
+                if column_index in NUMERIC_COLUMNS:
+                    cell.setTextAlignment(ALIGN_RIGHT)
+                self.table.setItem(row_index, column_index, cell)
 
         self.table.resizeColumnsToContents()
+        self._show_sort_indicator()
         first = 0 if not self._rows else self._offset + 1
         last = self._offset + len(self._rows)
         self.count_label.setText(
@@ -218,12 +330,23 @@ class LibraryPanel(QWidget):
     # ------------------------------------------------------------------- slots
     @pyqtSlot()
     def _reload(self) -> None:
+        low, high = self._duration_bounds()
+        if low and high and low > high:
+            self.table.setRowCount(0)
+            self._rows, self._total = [], 0
+            self.count_label.setText("The shortest duration is longer than the longest one.")
+            return
         try:
             self._rows, self._total = fetch_videos(
                 self._ctx.db_path,
                 search=self.search_input.text(),
                 source_id=self._selected_source_id(),
                 completeness=COMPLETENESS[self.completeness_select.currentText()],
+                channel=self.channel_select.currentText(),
+                min_duration=low,
+                max_duration=high,
+                sort_key=self._sort_key,
+                descending=self._sort_descending,
                 limit=self.page_size.value(),
                 offset=self._offset,
             )
@@ -234,6 +357,32 @@ class LibraryPanel(QWidget):
             return
         self._render()
         self._refresh_stats()
+
+    @pyqtSlot(int)
+    def _sort_by_column(self, column: int) -> None:
+        """Clicking a heading re-runs the query. Clicking the same one flips the order."""
+        key = COLUMNS[column][1] if 0 <= column < len(COLUMNS) else None
+        if key is None:
+            return
+        if key == self._sort_key:
+            self._sort_descending = not self._sort_descending
+        else:
+            self._sort_key = key
+            # Dates and counts are most useful newest and largest first; names are not.
+            self._sort_descending = key in {"cached_at", "upload_date", "download_count", "duration", "is_full_metadata"}
+        self._offset = 0
+        self._reload()
+
+    @pyqtSlot()
+    def _clear_filters(self) -> None:
+        self.search_input.clear()
+        self.channel_select.setCurrentText("")
+        for widget in (self.min_minutes, self.max_minutes):
+            widget.setValue(0)
+        self.source_select.setCurrentIndex(0)
+        self.completeness_select.setCurrentIndex(0)
+        self._offset = 0
+        self._reload()
 
     @pyqtSlot()
     def _reset_and_reload(self) -> None:
@@ -295,6 +444,7 @@ class LibraryPanel(QWidget):
             return
 
         self.stats_label.setText(f"Removed {removed} row(s) from {self._ctx.db_path}")
+        self._load_channels()
         # Step back a page if the last page emptied out.
         if self._offset >= self._total - removed and self._offset > 0:
             self._offset = max(0, self._offset - self.page_size.value())

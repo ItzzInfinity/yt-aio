@@ -20,6 +20,7 @@ from .db.database_manager import init_db
 from .features.downloader.panel import DownloaderPanel
 from .features.importer.panel import ImportPanel
 from .features.library.panel import LibraryPanel
+from .features.local_scan.panel import LocalScanPanel
 from .features.logs.panel import LogsPanel
 from .features.settings.panel import SettingsPanel
 from .ui.qt import TAB_NORTH, QApplication, QMainWindow, QTabWidget, exec_app
@@ -38,10 +39,11 @@ class AppShell(QMainWindow):
         self._tabs.setDocumentMode(True)
 
         # Tab order is workflow order: bring links in, fetch them, browse what was
-        # kept, check what happened, adjust the settings.
+        # kept, see what is already on disk, check what happened, adjust the settings.
         self._tabs.addTab(ImportPanel(context=context), "Import")
         self._tabs.addTab(DownloaderPanel(context=context), "Downloader")
         self._tabs.addTab(LibraryPanel(context=context), "Library")
+        self._tabs.addTab(LocalScanPanel(context=context), "Local Scan")
         self._tabs.addTab(LogsPanel(context=context), "Logs")
         self._tabs.addTab(SettingsPanel(context=context), "Settings")
         self._tabs.setCurrentIndex(1)

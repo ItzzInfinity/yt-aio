@@ -152,8 +152,35 @@ def fetch_sources(db_path: str) -> list[dict[str, Any]]:
         return [_row_to_dict(row) for row in rows]
 
 
+# Column heading -> the SQL that orders by it. The grid may only name a key from this
+# map, which is what keeps an ORDER BY clause out of reach of anything typed in the UI.
+LIBRARY_SORTS: dict[str, str] = {
+    "video_id": "COALESCE(v.video_id, '')",
+    "title": "COALESCE(v.title, '') COLLATE NOCASE",
+    "channel_name": "COALESCE(v.channel_name, v.playlist_name, '') COLLATE NOCASE",
+    "duration": "COALESCE(v.duration, -1)",
+    "upload_date": "COALESCE(v.upload_date, '')",
+    "cached_at": "COALESCE(v.cached_at, '')",
+    "is_full_metadata": "COALESCE(v.is_full_metadata, 0)",
+    "download_count": "download_count",
+}
+DEFAULT_LIBRARY_SORT = "cached_at"
+
+
+def _order_clause(sort_key: str, descending: bool) -> str:
+    expression = LIBRARY_SORTS.get(sort_key) or LIBRARY_SORTS[DEFAULT_LIBRARY_SORT]
+    direction = "DESC" if descending else "ASC"
+    # v.id breaks ties so paging stays stable when the sorted values are equal.
+    return f"{expression} {direction}, v.id {direction}"
+
+
 def _library_filters(
-    search: str, source_id: int | None, completeness: str
+    search: str,
+    source_id: int | None,
+    completeness: str,
+    channel: str = "",
+    min_duration: int | None = None,
+    max_duration: int | None = None,
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -165,6 +192,22 @@ def _library_filters(
             "OR COALESCE(v.channel_name, '') LIKE ? OR COALESCE(v.playlist_name, '') LIKE ?)"
         )
         params.extend([needle] * 4)
+
+    if channel.strip():
+        # Substring rather than equality: the drop-down offers exact names, but an
+        # operator who types half a name should still get the rows.
+        needle = f"%{channel.strip()}%"
+        clauses.append("(COALESCE(v.channel_name, '') LIKE ? OR COALESCE(v.playlist_name, '') LIKE ?)")
+        params.extend([needle] * 2)
+
+    # A row with no duration is excluded by any duration filter. It cannot be shown to
+    # satisfy a range when nothing is known about its length.
+    if min_duration:
+        clauses.append("v.duration IS NOT NULL AND v.duration >= ?")
+        params.append(int(min_duration))
+    if max_duration:
+        clauses.append("v.duration IS NOT NULL AND v.duration <= ?")
+        params.append(int(max_duration))
 
     if source_id is not None:
         clauses.append("v.source_id = ?")
@@ -183,16 +226,47 @@ def _library_filters(
     return where, params
 
 
+def fetch_channels(db_path: str, limit: int = 2000) -> list[str]:
+    """Every distinct channel or playlist name in the cache, for the filter drop-down."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        if not _table_exists(conn, "youtube_video_information"):
+            return []
+        rows = conn.execute(
+            """
+            SELECT DISTINCT name FROM (
+                SELECT channel_name AS name FROM youtube_video_information
+                UNION
+                SELECT playlist_name AS name FROM youtube_video_information
+            )
+            WHERE name IS NOT NULL AND name <> ''
+            ORDER BY name COLLATE NOCASE
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        return [str(row["name"]) for row in rows]
+
+
 def fetch_videos(
     db_path: str,
     *,
     search: str = "",
     source_id: int | None = None,
     completeness: str = "all",
+    channel: str = "",
+    min_duration: int | None = None,
+    max_duration: int | None = None,
+    sort_key: str = DEFAULT_LIBRARY_SORT,
+    descending: bool = True,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
-    """One page of the cached video rows, plus the total the filters match."""
+    """One page of the cached video rows, plus the total the filters match.
+
+    Sorting happens here rather than in the grid because the grid only ever holds one
+    page. Sorting the page would order 200 rows out of thousands and read as a bug.
+    """
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     offset = max(0, int(offset))
 
@@ -201,10 +275,13 @@ def fetch_videos(
         if not _table_exists(conn, "youtube_video_information"):
             return [], 0
 
-        where, params = _library_filters(search, source_id, completeness)
+        where, params = _library_filters(
+            search, source_id, completeness, channel, min_duration, max_duration
+        )
         total = conn.execute(
             f"SELECT COUNT(*) AS n FROM youtube_video_information v {where}", params
         ).fetchone()["n"]
+        order = _order_clause(sort_key, descending)
         rows = conn.execute(
             f"""
             SELECT v.id, v.video_id, v.title, v.channel_name, v.playlist_name, v.duration,
@@ -214,7 +291,7 @@ def fetch_videos(
                      WHERE d.video_info_id = v.id AND d.status = 'success') AS download_count
             FROM youtube_video_information v
             {where}
-            ORDER BY COALESCE(v.cached_at, '') DESC, v.id DESC
+            ORDER BY {order}
             LIMIT ? OFFSET ?
             """,
             [*params, limit, offset],
@@ -292,17 +369,22 @@ def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: st
             if not video_id:
                 skipped += 1
                 continue
+            # A schema-aware parser knows the real playlist or album; only fall back to
+            # the file name when it does not.
+            grouping = row.get("playlists") or row.get("album") or source_label
             conn.execute(
                 """
                 INSERT INTO youtube_video_information (
                     video_id, title, channel_name, playlist_name, upload_date, duration,
                     thumbnail_url, video_url, source_id, cached_at, is_full_metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(video_id) DO UPDATE SET
                     title = COALESCE(NULLIF(youtube_video_information.title, ''), excluded.title),
                     channel_name = COALESCE(NULLIF(youtube_video_information.channel_name, ''), excluded.channel_name),
+                    playlist_name = COALESCE(NULLIF(youtube_video_information.playlist_name, ''), excluded.playlist_name),
                     upload_date = COALESCE(NULLIF(youtube_video_information.upload_date, ''), excluded.upload_date),
                     duration = COALESCE(youtube_video_information.duration, excluded.duration),
+                    thumbnail_url = COALESCE(NULLIF(youtube_video_information.thumbnail_url, ''), excluded.thumbnail_url),
                     video_url = COALESCE(NULLIF(youtube_video_information.video_url, ''), excluded.video_url),
                     source_id = COALESCE(youtube_video_information.source_id, excluded.source_id)
                 """,
@@ -310,9 +392,10 @@ def import_video_rows(db_path: str, rows: list[dict[str, Any]], source_label: st
                     video_id,
                     row.get("title") or None,
                     row.get("channel_name") or None,
-                    source_label,
+                    grouping,
                     row.get("upload_date") or None,
                     row.get("duration_seconds"),
+                    row.get("thumbnail_url") or None,
                     row.get("url") or None,
                     source_id,
                     stamp,

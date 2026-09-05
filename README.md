@@ -2,10 +2,10 @@
 
 PyQt desktop frontend for the existing YouTube automation scripts in this folder.
 
-The window is a tab shell with five tabs: Import, Downloader, Library, Logs and Settings. Each one is a
-self-contained package under `yt_aio/application/features/`.
+The window is a tab shell with six tabs: Import, Downloader, Library, Local Scan, Logs and Settings. Each one
+is a self-contained package under `yt_aio/application/features/`.
 
-Current version: `0.5.0`
+Current version: `0.6.0`
 
 ## What it does
 
@@ -16,6 +16,7 @@ Current version: `0.5.0`
 - Tries raw `yt-dlp` first, then falls back to Brave/browser cookies for YouTube bot checks
 - Keeps the `yt_dlp` Python module available even when Brave cookie fallback switches `HOME`
 - Writes operational logs to a sqlite database and live text output in the GUI, tagged `[TX]`, `[RX]`, `[INFO]`, `[WARN]` and `[ERR]`
+- Reads a folder of audio files already on disk and grades each one against the database
 - Reads defaults from `yt_aio/application/config/config.json`
 
 ## Project Layout
@@ -23,9 +24,10 @@ Current version: `0.5.0`
 - `yt_aio/application/shell.py`: `AppShell`, the only window, owns the tab bar and `main()`
 - `yt_aio/application/context.py`: `AppContext`, the shared config and database handle passed to every panel
 - `yt_aio/application/jobs.py`: the shared `QThread` runners every tab uses for background work
-- `yt_aio/application/features/importer/`: the Import tab and its backup-file parsers
+- `yt_aio/application/features/importer/`: the Import tab, its backup-file parsers and the OpenTune reader
 - `yt_aio/application/features/downloader/panel.py`: the Downloader tab
 - `yt_aio/application/features/library/panel.py`: the Library tab
+- `yt_aio/application/features/local_scan/panel.py`: the Local Scan tab
 - `yt_aio/application/features/logs/panel.py`: the Logs tab
 - `yt_aio/application/features/settings/panel.py`: the Settings tab
 - `yt_aio/application/db/queries.py`: the read and delete path the viewing tabs share

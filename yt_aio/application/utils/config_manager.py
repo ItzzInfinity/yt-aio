@@ -35,6 +35,88 @@ LEGACY_PACKAGE_DB_PATH = PACKAGE_ROOT / "yt_aio.db"
 LEGACY_PROJECT_DB_PATH = LEGACY_PROJECT_ROOT / "yt_aio.db"
 
 
+# Every value that is known to work in a given field. The Settings tab turns these
+# into an editable drop-down, so a field still accepts anything the operator types;
+# the list is a shortcut, never a restriction. Keys absent from here stay free text.
+SETTING_SUGGESTIONS: dict[str, list[str]] = {
+    "default_download_path": [
+        str(Path.home() / "Downloads"),
+        str(Path.home() / "Music"),
+        str(Path.home() / "Videos"),
+    ],
+    "default_video_quality": [
+        "bv*+ba/b",
+        "bestvideo+bestaudio/best",
+        "bv*[height<=2160]+ba/b",
+        "bv*[height<=1440]+ba/b",
+        "bv*[height<=1080]+ba/b",
+        "bv*[height<=720]+ba/b",
+        "bv*[height<=480]+ba/b",
+        "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]",
+        "best",
+        "worst",
+    ],
+    "default_audio_quality": ["m4a", "mp3", "opus", "vorbis", "flac", "wav", "aac", "alac", "best"],
+    "log_level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    "proxy": [
+        "",
+        "socks5://127.0.0.1:1080",
+        "socks5h://127.0.0.1:9050",
+        "http://127.0.0.1:8080",
+    ],
+    "user_agent": [
+        (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        ),
+        (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        ),
+        (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+            "(KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+        ),
+        "Mozilla/5.0 (Android 14; Mobile; rv:124.0) Gecko/124.0 Firefox/124.0",
+        "com.google.android.youtube/19.09.37 (Linux; U; Android 14) gzip",
+    ],
+    "subtitle_language": ["en", "en.*", "en,hi,bn", "all", "hi", "bn", "es", "fr", "de", "ja"],
+    "thumbnail_quality": ["best", "worst"],
+    "description_format": ["txt", "json"],
+    "comments_format": ["txt", "json"],
+    "log_file_path": ["./db/yt_aio.db"],
+    "history_file_path": ["./db/yt_aio.db"],
+    "history_file_table_name": ["downloads", "youtube_video_information", "local_files"],
+    "logs_directory": ["./logs"],
+    "cookie_fallback_browser": [
+        "brave",
+        "chrome",
+        "chromium",
+        "edge",
+        "firefox",
+        "opera",
+        "safari",
+        "vivaldi",
+        "whale",
+    ],
+    "cookie_fallback_profile": ["", "Default", "Profile 1", "Profile 2"],
+    "cookie_fallback_home": ["", str(Path.home())],
+    "cookie_file": ["", str(Path.home() / "cookies.txt")],
+    "youtube_visitor_data": [""],
+    "youtube_remote_components": ["", "ejs:github", "ejs:npm", "web", "web_safari", "android", "ios", "tv"],
+}
+
+# Numbers get a range and a hint rather than a list, because the editor is a spin box.
+# (minimum, maximum, hint shown in the tool tip)
+SETTING_RANGES: dict[str, tuple[int, int, str]] = {
+    "max_retries": (0, 20, "Typical: 3. Zero means try once and give up."),
+    "retry_delay": (0, 600, "Seconds between retries. Typical: 5."),
+    "max_concurrent_downloads": (1, 32, f"Typical: cores minus two, here {max(1, (os.cpu_count() or 4) - 2)}."),
+    "max_metadata_workers": (1, 32, "Typical: 4. Higher trips YouTube rate limits sooner."),
+    "playlist_chunk_size": (10, 2000, "Flat-playlist entries handled per batch. Typical: 100."),
+}
+
+
 def _default_download_path() -> str:
     return str(Path.home() / "Downloads")
 

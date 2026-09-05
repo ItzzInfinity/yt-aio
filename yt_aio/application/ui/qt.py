@@ -20,6 +20,7 @@ try:
         QButtonGroup,
         QCheckBox,
         QComboBox,
+        QCompleter,
         QFileDialog,
         QFormLayout,
         QFrame,
@@ -57,6 +58,7 @@ except ImportError:
         QButtonGroup,
         QCheckBox,
         QComboBox,
+        QCompleter,
         QFileDialog,
         QFormLayout,
         QFrame,
@@ -105,6 +107,11 @@ if QT_API == "PyQt6":
     MB_YES = QMessageBox.StandardButton.Yes
     MB_NO = QMessageBox.StandardButton.No
     ELIDE_RIGHT = Qt.TextElideMode.ElideRight
+    MATCH_CONTAINS = Qt.MatchFlag.MatchContains
+    CASE_INSENSITIVE = Qt.CaseSensitivity.CaseInsensitive
+    SORT_ASCENDING = Qt.SortOrder.AscendingOrder
+    SORT_DESCENDING = Qt.SortOrder.DescendingOrder
+    ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 else:
     CHECKED = Qt.Checked
     UNCHECKED = Qt.Unchecked
@@ -122,6 +129,11 @@ else:
     MB_YES = QMessageBox.Yes
     MB_NO = QMessageBox.No
     ELIDE_RIGHT = Qt.ElideRight
+    MATCH_CONTAINS = Qt.MatchContains
+    CASE_INSENSITIVE = Qt.CaseInsensitive
+    SORT_ASCENDING = Qt.AscendingOrder
+    SORT_DESCENDING = Qt.DescendingOrder
+    ALIGN_RIGHT = Qt.AlignRight | Qt.AlignVCenter
 
 
 def exec_app(app: QApplication) -> int:

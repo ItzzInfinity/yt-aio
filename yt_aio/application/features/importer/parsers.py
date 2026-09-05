@@ -9,6 +9,10 @@ Format is detected from the file's own bytes, not from its extension, because ba
 files are routinely handed over with the wrong suffix or none at all. Supported:
 SQLite databases, ZIP archives containing any supported file, JSON, CSV and plain text.
 Anything else is scanned as text, which still finds links inside an unknown wrapper.
+
+A SQLite backup whose schema is recognised is read by that schema instead of scanned
+table by table; see opentune.py. The blind scan stays as the fallback for everything
+else, and it is the wrong tool whenever the layout is actually known.
 """
 
 from __future__ import annotations
@@ -17,24 +21,23 @@ import csv
 import io
 import json
 import os
-import re
 import sqlite3
 import tempfile
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-LogFn = Callable[[str], None]
-
-# youtu.be/ID, watch?v=ID, shorts/ID, embed/ID, v/ID, live/ID, and a bare 11-char id
-# in a field named like a video id. The id alphabet is fixed at 11 URL-safe characters.
-VIDEO_URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.|m\.|music\.)?"
-    r"(?:youtube\.com/(?:watch\?(?:[^\s\"'<>]*&)?v=|shorts/|embed/|v/|live/)|youtu\.be/)"
-    r"([A-Za-z0-9_-]{11})"
+from .models import (
+    BARE_ID_RE,
+    VIDEO_URL_RE,
+    ImportedItem,
+    canonical_url,
+    coerce_duration,
+    dedupe,
 )
-BARE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+from .opentune import looks_like_opentune, parse_opentune
+
+LogFn = Callable[[str], None]
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
 ZIP_MAGIC = b"PK\x03\x04"
@@ -47,50 +50,6 @@ TITLE_FIELDS = ("title", "name", "stream_title", "video_title", "track", "song")
 CHANNEL_FIELDS = ("uploader", "channel", "channel_name", "author", "artist", "uploader_name")
 DURATION_FIELDS = ("duration", "length", "duration_seconds", "seconds")
 DATE_FIELDS = ("upload_date", "upload_time", "published", "publish_date", "date", "added_at")
-
-
-@dataclass
-class ImportedItem:
-    video_id: str
-    url: str
-    title: str = ""
-    channel_name: str = ""
-    duration_seconds: int | None = None
-    upload_date: str = ""
-    origin: str = ""
-
-    @property
-    def display_title(self) -> str:
-        return self.title or self.video_id
-
-
-def canonical_url(video_id: str) -> str:
-    return f"https://www.youtube.com/watch?v={video_id}"
-
-
-def _coerce_duration(value: Any) -> int | None:
-    """Backup files store duration as seconds, as milliseconds, or as 'mm:ss'."""
-    if value in (None, ""):
-        return None
-    if isinstance(value, (int, float)):
-        seconds = int(value)
-        # NewPipe and several others store milliseconds. Nothing on YouTube runs for
-        # more than a day, so a value that large is a millisecond count.
-        return seconds // 1000 if seconds > 86_400 else seconds
-    text = str(value).strip()
-    if text.isdigit():
-        return _coerce_duration(int(text))
-    if ":" in text:
-        parts = text.split(":")
-        try:
-            numbers = [int(part) for part in parts]
-        except ValueError:
-            return None
-        total = 0
-        for number in numbers:
-            total = total * 60 + number
-        return total
-    return None
 
 
 def _first_field(record: dict[str, Any], names: tuple[str, ...]) -> Any:
@@ -128,7 +87,7 @@ def _item_from_record(record: dict[str, Any], origin: str) -> list[ImportedItem]
 
     title = _first_field(record, TITLE_FIELDS)
     channel = _first_field(record, CHANNEL_FIELDS)
-    duration = _coerce_duration(_first_field(record, DURATION_FIELDS))
+    duration = coerce_duration(_first_field(record, DURATION_FIELDS))
     uploaded = _first_field(record, DATE_FIELDS)
 
     items = []
@@ -147,55 +106,48 @@ def _item_from_record(record: dict[str, Any], origin: str) -> list[ImportedItem]
     return items
 
 
-def _dedupe(items: list[ImportedItem]) -> list[ImportedItem]:
-    """First occurrence wins, but a later richer copy fills in what the first lacked."""
-    merged: dict[str, ImportedItem] = {}
-    for item in items:
-        existing = merged.get(item.video_id)
-        if existing is None:
-            merged[item.video_id] = item
-            continue
-        existing.title = existing.title or item.title
-        existing.channel_name = existing.channel_name or item.channel_name
-        existing.duration_seconds = existing.duration_seconds or item.duration_seconds
-        existing.upload_date = existing.upload_date or item.upload_date
-    return list(merged.values())
-
-
 # --------------------------------------------------------------------- formats
-def parse_sqlite(path: Path, log: LogFn, origin: str = "") -> list[ImportedItem]:
-    """Scan every table of a database another app wrote.
+def _scan_every_table(conn: sqlite3.Connection, name: str, origin: str, log: LogFn) -> list[ImportedItem]:
+    """The fallback: pull ids out of whatever tables happen to be there."""
+    items: list[ImportedItem] = []
+    tables = [
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
+    log(f"Schema not recognised. Scanning all {len(tables)} table(s) in {name}.")
+    for table in tables:
+        try:
+            rows = conn.execute(f'SELECT * FROM "{table}" LIMIT {MAX_ROWS_PER_TABLE}').fetchall()
+        except sqlite3.Error as exc:
+            log(f"Skipped table {table}: {exc}")
+            continue
+        found: list[ImportedItem] = []
+        for row in rows:
+            found.extend(_item_from_record({key: row[key] for key in row.keys()}, f"{origin}:{table}"))
+        if found:
+            log(f"  {table}: {len(found)} item(s) from {len(rows)} row(s).")
+        items.extend(found)
+    return items
+
+
+def parse_sqlite(path: Path, log: LogFn, origin: str = "") -> tuple[list[ImportedItem], str]:
+    """Read a database another app wrote. Returns the items and the schema used.
 
     Opened read-only through a URI so a backup can never be modified by being read.
+    A known schema is read by its own reader; anything else falls back to the scan.
     """
     origin = origin or path.name
-    items: list[ImportedItem] = []
     uri = f"file:{path.as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        tables = [
-            row["name"]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-            )
-        ]
-        log(f"Scanning {len(tables)} table(s) in {path.name}.")
-        for table in tables:
-            try:
-                rows = conn.execute(f'SELECT * FROM "{table}" LIMIT {MAX_ROWS_PER_TABLE}').fetchall()
-            except sqlite3.Error as exc:
-                log(f"Skipped table {table}: {exc}")
-                continue
-            found: list[ImportedItem] = []
-            for row in rows:
-                found.extend(_item_from_record({key: row[key] for key in row.keys()}, f"{origin}:{table}"))
-            if found:
-                log(f"  {table}: {len(found)} item(s) from {len(rows)} row(s).")
-            items.extend(found)
+        if looks_like_opentune(conn):
+            return parse_opentune(conn, log, origin), "OpenTune backup"
+        return _scan_every_table(conn, path.name, origin, log), "SQLite database"
     finally:
         conn.close()
-    return items
 
 
 def parse_json(text: str, log: LogFn, origin: str) -> list[ImportedItem]:
@@ -246,7 +198,7 @@ def _parse_bytes(payload: bytes, name: str, log: LogFn) -> tuple[list[ImportedIt
             # only inside a directory we created. That is what closes zip-slip.
             target = Path(tmp) / (os.path.basename(name) or "backup.db")
             target.write_bytes(payload)
-            return parse_sqlite(target, log, origin=name), "SQLite database"
+            return parse_sqlite(target, log, origin=name)
 
     text = payload.decode("utf-8", errors="replace")
     stripped = text.lstrip()
@@ -301,7 +253,7 @@ def parse_backup_file(path: str | Path, log: LogFn) -> tuple[list[ImportedItem],
 
     header = file_path.open("rb").read(len(SQLITE_MAGIC))
     if header.startswith(SQLITE_MAGIC):
-        items, label = parse_sqlite(file_path, log), "SQLite database"
+        items, label = parse_sqlite(file_path, log)
     elif header.startswith(ZIP_MAGIC):
         items, label = parse_zip(file_path, log)
     else:
@@ -309,6 +261,6 @@ def parse_backup_file(path: str | Path, log: LogFn) -> tuple[list[ImportedItem],
             raise ValueError(f"File is {size} bytes, over the {MAX_TEXT_BYTES} byte text limit.")
         items, label = _parse_bytes(file_path.read_bytes(), file_path.name, log)
 
-    unique = _dedupe(items)
+    unique = dedupe(items)
     log(f"Detected format: {label}. {len(items)} raw item(s), {len(unique)} unique video(s).")
     return unique, label

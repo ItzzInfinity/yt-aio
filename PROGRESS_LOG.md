@@ -1,6 +1,40 @@
 
 # Progress Log
 
+## 2026-09-04 22:53 IST — version 0.6.0
+
+Worked the batch of five items at the end of FSD 1.8.2.
+
+- Added the `Local Scan` tab (`features/local_scan/panel.py`). It walks a chosen folder and its
+  subfolders, reads tags through mutagen with ffprobe as the fallback and the file name as the last
+  resort, and grades every file against the database as `In database`, `Probable match`, `Title clash`
+  or `New`. Grading rather than a yes/no is deliberate: a wrong "already have it" would stop a
+  download the operator wanted.
+- Added `utils/local_library.py` for the scanning and tag reading, and `db/local_files.py` for the
+  matching and the `local_files` table. A rescan reports the files that were not there last time and
+  forgets the ones that have gone. No file on disk is ever modified.
+- Fixed two defects in title normalisation found while testing: Python's `\w` excludes combining
+  marks, which split every Bengali title into single letters, and "song" and "full" were being
+  stripped as noise, which collapsed "Full Moon" and "Moon" into the same title.
+- Added `features/importer/opentune.py`, a schema-aware reader for OpenTune / InnerTune backups,
+  after reading the schema in `Docs/song_db_erd.html`. The generic table scan was importing
+  `related_song_map`, which is the recommendation graph rather than saved music, and could not
+  attach an artist to anything because artist names are only reachable through `song_artist_map`.
+  Split `ImportedItem` out into `features/importer/models.py` so both readers share one row type.
+- Added duration and channel filters plus per-column sorting to the Library, Import and Local Scan
+  viewers. Library and Local Scan sort in SQL because they are paged; Import sorts in memory. Import's
+  tick boxes are now keyed by video id, so a selection survives a change of filter or sort.
+- Added `SETTING_SUGGESTIONS` and `SETTING_RANGES` to `utils/config_manager.py`. The Settings tab
+  turns 20 text fields into editable drop-downs and gives 5 numeric fields a real range and a
+  typical-value tool tip. Anything typed is still accepted.
+- Wrote `Docs/06_YTDLNIS_APPROACH.md` after reading `YTDLPUtil.kt` in `~/Downloads/ytdlnis` 1.8.9.1:
+  the commands it builds, the eight changes worth making to our code with the file and function for
+  each, and the four things not worth copying. Nothing from it was implemented; the item asked what
+  to change.
+- Verified against the real 3462-row database and a generated fixture set: all six tabs construct and
+  paint, every sortable column sorts, all seven local-scan match cases classify correctly, and the
+  settings round trip reports no spurious changes.
+
 ## 2026-03-28 17:40 IST
 
 - Created the `yt_aio` package as a dedicated GUI project area under `my_music/automation`.

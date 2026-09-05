@@ -9,6 +9,10 @@ Runs:   nothing (dev_guide.md 5, Pattern E).
 Editors are built from the default config, so a key added to build_default_config
 appears here with no change to this file. Types come from the default value, which is
 also what decides how the edited value is written back.
+
+A key listed in SETTING_SUGGESTIONS gets an editable drop-down of the values known to
+work in that field. The list is a shortcut, not a validator: anything typed is still
+accepted, because yt-dlp takes far more than can be enumerated here.
 """
 
 from __future__ import annotations
@@ -23,7 +27,11 @@ from ...ui.qt import (
     ALIGN_TOP,
     MB_NO,
     MB_YES,
+    CASE_INSENSITIVE,
+    MATCH_CONTAINS,
     QCheckBox,
+    QComboBox,
+    QCompleter,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -39,7 +47,7 @@ from ...ui.qt import (
     pyqtSlot,
 )
 from ...ui.widgets import muted
-from ...utils.config_manager import build_default_config
+from ...utils.config_manager import SETTING_RANGES, SETTING_SUGGESTIONS, build_default_config
 
 DIRECTORY_KEYS = {"default_download_path", "logs_directory", "cookie_fallback_home"}
 FILE_KEYS = {"log_file_path", "history_file_path", "cookie_file"}
@@ -131,15 +139,60 @@ class SettingsPanel(QWidget):
             return editor
         if isinstance(default, int) and not isinstance(default, bool):
             editor = QSpinBox()
-            editor.setRange(0, 1_000_000)
+            low, high, hint = SETTING_RANGES.get(key, (0, 1_000_000, ""))
+            editor.setRange(low, high)
+            if hint:
+                editor.setToolTip(f"{hint} Allowed: {low} to {high}.")
             try:
                 editor.setValue(int(value))
             except (TypeError, ValueError):
                 editor.setValue(int(default))
             return editor
 
+        suggestions = self._suggestions_for(key)
+        if suggestions:
+            return self._make_suggestion_box(key, value, default, suggestions)
+
         editor = QLineEdit("" if value is None else str(value))
         editor.setPlaceholderText("empty means not set" if default is None else str(default))
+        return editor
+
+    def _suggestions_for(self, key: str) -> list[str]:
+        """Catalogue values first, then the default and whatever is in the file now.
+
+        The stored value is always offered so an operator never has to retype a working
+        setting the catalogue has not heard of.
+        """
+        listed = list(SETTING_SUGGESTIONS.get(key, ()))
+        if not listed:
+            return []
+        for extra in (self._defaults.get(key), self._ctx.raw_config.get(key)):
+            if extra not in (None, "") and str(extra) not in listed:
+                listed.append(str(extra))
+        return listed
+
+    def _make_suggestion_box(self, key: str, value: Any, default: Any, suggestions: list[str]) -> QComboBox:
+        editor = QComboBox()
+        editor.setEditable(True)
+        editor.setInsertPolicy(QComboBox.InsertPolicy.NoInsert if hasattr(QComboBox, "InsertPolicy") else QComboBox.NoInsert)
+        editor.addItems(suggestions)
+
+        completer = editor.completer()
+        if completer is not None:
+            completer.setCaseSensitivity(CASE_INSENSITIVE)
+            completer.setFilterMode(MATCH_CONTAINS)
+            completer.setCompletionMode(
+                QCompleter.CompletionMode.PopupCompletion
+                if hasattr(QCompleter, "CompletionMode")
+                else QCompleter.PopupCompletion
+            )
+
+        text = "" if value is None else str(value)
+        editor.setCurrentText(text)
+        line = editor.lineEdit()
+        if line is not None:
+            line.setPlaceholderText("empty means not set" if default is None else str(default))
+        editor.setToolTip(f"{len(suggestions)} suggested value(s). Anything typed is accepted.")
         return editor
 
     def _row_widget(self, key: str, editor: QWidget) -> QWidget:
@@ -185,7 +238,9 @@ class SettingsPanel(QWidget):
             elif isinstance(editor, QSpinBox):
                 collected[key] = int(editor.value())
             else:
-                text = editor.text().strip()
+                text = (
+                    editor.currentText() if isinstance(editor, QComboBox) else editor.text()
+                ).strip()
                 if not text:
                     # A key whose default is a string keeps an empty string; a key whose
                     # default is None becomes null, which is what the utils layer expects.
@@ -207,14 +262,25 @@ class SettingsPanel(QWidget):
 
     # ------------------------------------------------------------------- slots
     @pyqtSlot()
-    def _browse(self, key: str, editor: QLineEdit) -> None:
-        current = editor.text().strip() or str(Path.home())
+    def _browse(self, key: str, editor: QWidget) -> None:
+        current = self._editor_text(editor).strip() or str(Path.home())
         if key in DIRECTORY_KEYS:
             chosen = QFileDialog.getExistingDirectory(self, f"Choose a directory for {key}", current)
         else:
             chosen, _ = QFileDialog.getOpenFileName(self, f"Choose a file for {key}", current)
         if chosen:
-            editor.setText(chosen)
+            if isinstance(editor, QComboBox):
+                editor.setCurrentText(chosen)
+            else:
+                editor.setText(chosen)
+
+    @staticmethod
+    def _editor_text(editor: QWidget) -> str:
+        if isinstance(editor, QComboBox):
+            return editor.currentText()
+        if isinstance(editor, QLineEdit):
+            return editor.text()
+        return ""
 
     @pyqtSlot()
     def _save(self) -> None:
