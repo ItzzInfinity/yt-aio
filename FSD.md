@@ -1,7 +1,34 @@
 <!-- Functional Specification Document -->
 # 1. Project name: YT AIO
 
-## Current state — 2026-09-05 (session 1) — applied the 1.8.2 batch end to end
+## Current state — 2026-09-05 (session 2) — fixed the two regressions reported in 1.6
+
+- **Current phase:** 1.6 items 10 and 11 closed. Roadmap clear.
+- **Last completed task:** F2, separating the Settings help text from the config keys.
+- **Next task:** Nothing pending. Still worth doing on live data: update yt-dlp, sign in to Brave once, then fetch a real playlist and download one file.
+
+### Session summary
+1. **F1.** `build_youtube_extractor_args` was missing from `utils/video_info_extractor.py` entirely, so every download raised `NameError`. The E1 edit last session rewrote `_cookie_home_override` by replacing the text from its own `def` up to the next one, and this function was in that gap. Restored above its only caller and the call uncommented. Checked against the last commit that it was the only casualty.
+2. **F2.** The Settings tab packed the key name and its help into one word-wrapped label. That read as a run-on string and collapsed the form: 49 rows needing 1800 pixels were pinned to a 690-pixel viewport, no scroll bar was offered, and every row was squeezed to 8 pixels. The key is now its own label, the help is a caption under its editor, and the form gets a real minimum height.
+
+**Gotchas learned this session:**
+- **An index-to-index text replacement is only as safe as what sits between the two anchors.** Replacing from `def a(` to `def b(` silently deletes anything written between them. When a function's only reference is inside another function, Python raises nothing until that line runs, so neither `compileall` nor importing the module catches it. Comparing the module's top-level function names against the previous commit does, and takes seconds.
+- **A word-wrapped QLabel inside a resizable QScrollArea collapses the layout.** Its height depends on its width, so the scroll area sizes the child to the viewport instead of to the content, and every row is squeezed with no scroll bar to show for it. Keep labels single-line, or set an explicit minimum height on the scrolled widget.
+- **Measure the layout after `activate()`, never during the build.** `QFormLayout.sizeHint()` mid-build returned 18 pixels, the margins alone. Setting that as the minimum height was worse than setting none, because it pinned the form smaller than Qt would have on its own.
+
+### Partially done
+- none
+
+### Blocked
+- **Live download verification**, unchanged from session 1. Update yt-dlp first; it is 2026.03.17 and reports itself as stale.
+
+### Next step (exact)
+Start the application, open Settings, and confirm the scroll bar reaches `ui_theme` at the bottom with every key on its own line above its help. Then run one download from the Downloader tab and confirm it no longer raises `NameError: name 'build_youtube_extractor_args' is not defined`.
+
+### Assumptions
+- The help text stays visible on screen rather than moving into tooltips only. It is also on the key's tooltip, so both work.
+
+## Previous state — 2026-09-05 (session 1) — applied the 1.8.2 batch end to end
 
 - **Current phase:** 1.9 roadmap complete. Every request from FSD 1.8.2 line 243 onwards is closed.
 - **Last completed task:** E2, balancing the Library filter row.
@@ -207,8 +234,8 @@ Run `python3 -m pip install -U yt-dlp`, sign in to YouTube in Brave once, then s
 - 7. migrate all dependencies / all files to the project directory except for run_yt_aio_gui.py - **Closed**
 - 8. Default priority for URL download over channel or playlist download is not working. Need to check the code and see what is causing the issue.
 - 9. Its showing yt-dlp module not found error. Need to check the logs and see what is causing the issue.
-- 10. In `settings` All the texts read from config.json are overlapped with config parsing systems **HELP Dictionary**. Need to fix it. 
-- 11. While downloading getting this error `name 'build_youtube_extractor_args' is not defined` - Need to check the code. I have commented `yt_aio/application/utils/video_info_extractor.py:117:    args.extend(build_youtube_extractor_args(config))` and it works fine. Need to check the code and see what is causing the issue.  
+- 10. In `settings` All the texts read from config.json are overlapped with config parsing systems **HELP Dictionary**. Need to fix it. - **Fixed**. Two faults, both mine from the previous session. The help text was being glued onto the key name inside one label as `key\nhelp`, so the two read as a single run-on string. Worse, a word-wrapped label has a height that depends on its width, and that collapsed the whole form: the 49 rows needed about 1800 pixels, the scroll area pinned them to the 690-pixel viewport, offered no scroll bar at all, and squeezed every row to 8 pixels, which is why the key names looked clipped and overlapped. The key is now its own single-line label and the help is a muted caption under the editor it describes, and `_sync_form_height` gives the form its real height so the scroll bar appears. It measures after `activate()` and once more on a deferred pass, because asking during the build returns 18 pixels, the margins alone, and setting that as the minimum was worse than setting nothing.
+- 11. While downloading getting this error `name 'build_youtube_extractor_args' is not defined` - Need to check the code. I have commented `yt_aio/application/utils/video_info_extractor.py:117:    args.extend(build_youtube_extractor_args(config))` and it works fine. Need to check the code and see what is causing the issue. - **Fixed**. Your workaround was the right call but it silently dropped `youtube_visitor_data`, which the code passed before. Root cause: the function was never in the file. It was written between `_cookie_home_override` and `build_yt_dlp_env`, and the later edit that rewrote `_cookie_home_override` replaced everything from its own `def` up to the next one, taking this function with it. Nothing caught it because the only reference is inside another function, so it is a NameError at call time and not an ImportError at start-up. Restored, and moved directly above its one caller so the same class of accident cannot repeat. Checked against the last commit that no other function went with it: this was the only one. The commented-out call is live again.
 
 ## 1.7. Modularity
 - The code should be modular and should be organized.
@@ -319,6 +346,10 @@ The bullets above stay as written and are annotated in place when the whole requ
 - [x] D2 — Add `features/importer/vitune.py` and register it in the Import tab — done 2026-09-05; a separate reader from `opentune.py`, because ViTune's tables are PascalCase, its duration is the string `3:35`, its `SongArtistMap` is empty for a fifth of the songs so `artistsText` cannot be ignored, and it has no download or library column, so nothing is marked Downloaded rather than guessed. Registered ahead of the blind scan in `parsers.py`. On the real backup it reads 5085 rows and keeps 5029, skipping 42 on-device `local:` files and 14 blacklisted songs, and finds 2104 multi-artist songs, 3936 albums and 329 playlist memberships.
 - [x] D2a — Fix two credit-parsing faults found while verifying D2 — done 2026-09-05; nine ViTune credits hold a non-breaking space, so `Arijit Singh` typed normally matched 2 songs instead of 212. `clean_name` in `db/database_manager.py` now collapses every whitespace run before a name is stored, and the parser does the same on the way out. Splitting a credit on a spaced ampersand also tore `Simon & Garfunkel` in half, so a credit the Artist table already knows in full is no longer split at all. The heuristic still splits a duo the table has never heard of, which is the honest limit of it. Pipes always separate: 32 songs use them and no artist name contains one.
 - [x] D3 — Write `Docs/opentune_vs_vitune.html`, the schema comparison — done 2026-09-05; six verdict cards, a table-for-table comparison of all 16 tables with real row counts from both backups, a feature-by-feature table of 13 questions an importer has to answer, and the mapping onto the YT AIO music tables. The short version: OpenTune records more about a song, ViTune records more about listening, and neither is a superset, which is why there are two readers. Checked by rendering the page headless.
+
+### F. Regressions reported after the 1.9 batch (FSD 1.6 items 10 and 11)
+- [x] F1 — Restore `build_youtube_extractor_args`, deleted by the E1 edit — done 2026-09-05; the helper sat between `_cookie_home_override` and `build_yt_dlp_env`, and the E1 rewrite of the first replaced the text up to the second, taking it with it. Every download then raised `NameError` at call time, which no import check could catch. Restored above its only caller and the call uncommented, so `youtube_visitor_data`, `youtube_player_clients` and `youtube_po_tokens` reach yt-dlp again. Verified against the last commit that no other function was lost, and by building the base arguments with each combination.
+- [x] F2 — Stop the Settings help text overlapping the config keys — done 2026-09-05; the key and its help shared one word-wrapped label, which both read as a run-on string and collapsed the form, because a wrapped label's height depends on its width and the scroll area then pinned 49 rows into a 690-pixel viewport at 8 pixels each with no scroll bar. The key is now its own single-line label, the help is a muted caption under its editor, and `_sync_form_height` sets a real minimum height after `activate()` plus one deferred pass. Measured before and after: host height 687 with scroll range 0 and 8-pixel rows, against 2335 with scroll range 1618 and 22-to-32-pixel rows. Confirmed by screenshot in both themes.
 
 ### E. Brave cookies
 - [x] E1 — Detect the Brave profile and cookie paths and offer them in the Settings tab — done 2026-09-05; new `utils/browser_cookies.py` knows the three layouts a browser can have on Linux and tests for an actual cookie file rather than a directory, which matters here: `~/.config/BraveSoftware/Brave-Browser` exists on this machine and holds no profile at all, while the real cookies are in the snap revision `~/snap/brave/678`. `cookie_fallback_home` and `cookie_fallback_profile` are now filled from what is installed instead of from a guessed list, and the Settings tab prints under the browser field exactly what was found and what to set. The extractor's own snap-only lookup was replaced by the shared one, so flatpak and package installs are handled too. Verified: `brave` resolves to the snap revision, `chrome` correctly resolves to no override because it is a package install, and an explicit home still wins.

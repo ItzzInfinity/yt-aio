@@ -102,6 +102,38 @@ def build_yt_dlp_env(config: dict[str, Any], *, use_auth: bool = False) -> dict[
     return env
 
 
+def build_youtube_extractor_args(config: dict[str, Any]) -> list[str]:
+    """One --extractor-args value for the youtube extractor (06_YTDLNIS_APPROACH.md 3.7).
+
+    yt-dlp keeps only the last --extractor-args for a given extractor, so visitor data,
+    the player client list and PO tokens have to be joined with ";" into a single option
+    rather than passed as three. Player clients and PO tokens are the current answer to
+    bot checks; the cookie fallback stays as the second line, not the first.
+
+    Defined above its caller on purpose. It previously sat below, between two other
+    helpers, and an edit that replaced the function above it took this one with it.
+    """
+    parts: list[str] = []
+
+    clients = str(config.get("youtube_player_clients") or "").strip()
+    if clients:
+        parts.append(f"player_client={clients}")
+
+    visitor = str(config.get("youtube_visitor_data") or "").strip()
+    if visitor:
+        parts.append(f"visitor_data={visitor}")
+
+    # Several tokens are allowed; the config holds them comma separated for readability
+    # and they are re-joined here the way yt-dlp expects.
+    tokens = [token.strip() for token in str(config.get("youtube_po_tokens") or "").split(",") if token.strip()]
+    if tokens:
+        parts.append("po_token=" + ",".join(tokens))
+
+    if not parts:
+        return []
+    return ["--extractor-args", "youtube:" + ";".join(parts)]
+
+
 def build_yt_dlp_base_args(config: dict[str, Any], *, use_auth: bool = False) -> list[str]:
     args: list[str] = []
 
@@ -114,7 +146,7 @@ def build_yt_dlp_base_args(config: dict[str, Any], *, use_auth: bool = False) ->
     if config.get("youtube_remote_components"):
         args.extend(["--remote-components", str(config["youtube_remote_components"])])
 
-    # args.extend(build_youtube_extractor_args(config))
+    args.extend(build_youtube_extractor_args(config))
 
     if use_auth:
         if config.get("cookie_file"):

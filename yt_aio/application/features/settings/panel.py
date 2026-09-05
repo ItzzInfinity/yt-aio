@@ -42,6 +42,7 @@ from ...ui.qt import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTimer,
     QVBoxLayout,
     QWidget,
     pyqtSlot,
@@ -67,9 +68,8 @@ HELP = {
     "cookie_fallback_browser": "Which browser to take cookies from.",
     "cookie_fallback_profile": "Which profile inside that browser. Empty means the default one.",
     "cookie_fallback_home": (
-        "Only needed for a confined install. yt-dlp looks under $HOME/.config, which is not where a\n"
-        "snap or a flatpak keeps its profile, so this points it at the right place. Leave it empty and\n"
-        "the path is worked out from the browser above."
+        "Only needed for a confined install. yt-dlp looks under $HOME/.config, which is not where a "
+        "snap or a flatpak keeps its profile. Leave it empty and the path is worked out from the browser above."
     ),
     "youtube_visitor_data": "Token used for some YouTube requests. Kept out of the change log.",
     "youtube_player_clients": "Extraction clients to try, comma separated. The current first answer to bot checks.",
@@ -142,6 +142,41 @@ class SettingsPanel(QWidget):
         # ---- 5. initial state. Editors are built on the first paint, not here, so
         # the constructor stays free of file reads.
         self.path_label.setText(str(self._ctx.config_path))
+
+    def _sync_form_height(self) -> None:
+        """Let the form be as tall as it needs to be, so the scroll bar appears.
+
+        A QScrollArea in widgetResizable mode sizes its child to the viewport. With 49
+        settings the form needs about 1800 pixels and the viewport offers under 750, and
+        without an explicit minimum every row was squeezed to eight pixels: labels were
+        clipped mid-descender and no scroll bar was ever offered.
+
+        The measurement has to happen after the layout has been laid out. Asking during
+        _build_form returns 18 pixels, the margins alone, and setting that as the minimum
+        is worse than setting nothing. Hence activate() first, a width of zero treated as
+        "not ready yet", and the deferred second pass _build_form schedules.
+        """
+        layout = self.form
+        layout.activate()
+
+        width = self.scroll.viewport().width()
+        if width <= 0:
+            return
+
+        needed = layout.heightForWidth(width) if layout.hasHeightForWidth() else layout.sizeHint().height()
+        # Anything at or below the margins means the layout is not ready. Keep whatever
+        # minimum is already in place rather than replacing it with a wrong one.
+        if needed <= layout.contentsMargins().top() + layout.contentsMargins().bottom():
+            return
+
+        if needed != self.form_host.minimumHeight():
+            self.form_host.setMinimumHeight(needed)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """A narrower window wraps more help text, so the needed height changes with it."""
+        super().resizeEvent(event)
+        if self._built:
+            self._sync_form_height()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().showEvent(event)
@@ -220,18 +255,51 @@ class SettingsPanel(QWidget):
         editor.setToolTip(f"{len(suggestions)} suggested value(s). Anything typed is accepted.")
         return editor
 
-    def _row_widget(self, key: str, editor: QWidget) -> QWidget:
-        """Wrap an editor, adding a Browse button for the keys that name a path."""
-        if key not in DIRECTORY_KEYS and key not in FILE_KEYS:
-            return editor
+    def _help_for(self, key: str, value: Any) -> str:
+        """The explanation for one setting, plus anything discovered on this machine."""
+        text = HELP.get(key, "")
+        if key == "cookie_fallback_browser":
+            # What is actually installed, not what could be. Rebuilt on every form build,
+            # so plugging in a browser and pressing Reload shows it.
+            try:
+                found = describe_browser(str(value or ""))
+            except Exception:
+                found = ""
+            if found:
+                text = f"{text} {found}".strip()
+        return text
 
+    def _field_widget(self, key: str, editor: QWidget, value: Any) -> QWidget:
+        """The right-hand half of a row: the editor, a Browse button, and the help under it.
+
+        The help used to be a second line inside the key's own label. Two problems came
+        with that. The two texts read as one run-on string, which is what the config key
+        is called and what it does jammed together; and a word-wrapped label has a
+        height that depends on its width, which collapsed the whole scrolling form.
+        """
         host = QWidget()
-        row = QHBoxLayout(host)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(editor, 1)
-        browse = QPushButton("Browse...")
-        row.addWidget(browse)
-        browse.clicked.connect(lambda _=False, k=key, e=editor: self._browse(k, e))
+        column = QVBoxLayout(host)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+
+        if key in DIRECTORY_KEYS or key in FILE_KEYS:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(editor, 1)
+            browse = QPushButton("Browse...")
+            row.addWidget(browse)
+            browse.clicked.connect(lambda _=False, k=key, e=editor: self._browse(k, e))
+            column.addLayout(row)
+        else:
+            column.addWidget(editor)
+
+        text = self._help_for(key, value)
+        if text:
+            caption = muted(text)
+            caption.setWordWrap(True)
+            column.addWidget(caption)
+            editor.setToolTip("\n".join(filter(None, [editor.toolTip(), text])))
+
         return host
 
     def _build_form(self, config: dict[str, Any]) -> None:
@@ -246,19 +314,21 @@ class SettingsPanel(QWidget):
             value = config.get(key, self._defaults.get(key))
             editor = self._make_editor(key, value)
             self._editors[key] = editor
-            label_text = key if key not in HELP else f"{key}\n{HELP[key]}"
-            if key == "cookie_fallback_browser":
-                # What is actually installed, not what could be. Recomputed on every
-                # build, so plugging in a browser and pressing Reload shows it.
-                try:
-                    label_text += f"\n{describe_browser(str(value or ''))}"
-                except Exception:
-                    pass
-            label = QLabel(label_text)
-            label.setWordWrap(True)
-            self.form.addRow(label, self._row_widget(key, editor))
+
+            label = QLabel(key)
+            # No wrapping here. A key is one short token, and a wrapped label is what
+            # made the form collapse in the first place.
+            label.setWordWrap(False)
+            label.setAlignment(ALIGN_TOP)
+            help_text = self._help_for(key, value)
+            if help_text:
+                label.setToolTip(help_text)
+            self.form.addRow(label, self._field_widget(key, editor, value))
 
         self.path_label.setText(str(self._ctx.config_path))
+        self._sync_form_height()
+        # Once more after this event finishes, when the viewport has a real width.
+        QTimer.singleShot(0, self._sync_form_height)
 
     def _collect(self) -> dict[str, Any]:
         """Read the editors back into a config dictionary, keyed by the default's type."""
