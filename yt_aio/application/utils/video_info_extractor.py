@@ -26,7 +26,7 @@ from ..db.database_manager import (
 )
 from .browser_cookies import cookie_home_for
 from .config_manager import resolve_runtime_path
-from .shared import CancellationToken, LogFn, VideoItem, now_string, safe_log
+from .shared import CancellationToken, LogFn, VideoItem, now_string, process_kwargs, safe_log, system_info
 
 
 BOT_CHALLENGE_MARKERS = (
@@ -314,8 +314,8 @@ def run_json_command(
                 build_yt_dlp_command(config, command_parts, use_auth=attempted_auth),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
                 env=build_yt_dlp_env(config, use_auth=attempted_auth),
+                **process_kwargs(),
             )
             if token is not None:
                 token.register(process)
@@ -564,7 +564,7 @@ def _run_metadata_chunk(
     collected: dict[str, dict[str, Any]] = {}
     stderr_text = ""
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
             for video_id in video_ids:
                 stream.write(f"https://www.youtube.com/watch?v={video_id}\n")
 
@@ -588,9 +588,8 @@ def _run_metadata_chunk(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
             env=build_yt_dlp_env(config, use_auth=use_auth),
+            **process_kwargs(bufsize=1),
         )
         token.register(process)
         try:
@@ -770,9 +769,8 @@ def _stream_flat_playlist(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
         env=env,
+        **process_kwargs(bufsize=1),
     )
     token.register(process)
 
@@ -983,7 +981,7 @@ def list_videos(
                             "action": "fetch_full_metadata",
                             "user_input": source_value,
                             "script_version": APP_VERSION,
-                            "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
+                            "system_info": system_info(),
                         },
                     )
 

@@ -30,8 +30,18 @@ THEME_LABELS = {
     "light": "light (Day Mode)",
 }
 
+# No font family is set, deliberately. The style sheet used to ask for
+# "fonts-dejavu-core", which is a Debian package name rather than a family, so Qt matched
+# nothing and used its own default: Segoe UI on Windows, the system font on macOS, the
+# desktop font on Linux. That is the right answer on every platform.
+#
+# Naming a stack instead is worse, and visibly so. Qt takes the first family that exists
+# and its fallback for missing glyphs is poorer than its first-choice matching: with
+# "Noto Sans" named, a Bengali title rendered with broken conjuncts, because that face is
+# installed here without Bengali shaping tables. Rendering the same string with no family
+# set is correct. A library full of Bengali and Hindi titles is worth more than a
+# particular Latin face.
 _SHARED = {
-    "font_family": '"fonts-dejavu-core"',
     "font_size": "13px",
 }
 

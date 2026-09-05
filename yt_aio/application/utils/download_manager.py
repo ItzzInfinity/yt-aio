@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,7 +17,8 @@ from ..db.database_manager import (
     log_user_action,
 )
 from .config_manager import resolve_runtime_path
-from .shared import CancellationToken, DownloadTarget, LogFn, now_string, safe_log
+from .external_tools import ffmpeg_location
+from .shared import CancellationToken, DownloadTarget, LogFn, now_string, process_kwargs, safe_log, system_info
 from .video_info_extractor import (
     _should_retry_with_auth,
     build_yt_dlp_command,
@@ -71,6 +73,21 @@ def build_metadata_args(config: dict[str, Any]) -> list[str]:
     if config.get("embed_album_from_playlist"):
         args.extend(["--parse-metadata", PLAYLIST_ALBUM_RULE])
     return args
+
+
+def build_ffmpeg_args(config: dict[str, Any]) -> list[str]:
+    """Point yt-dlp at ffmpeg when it is somewhere PATH does not mention.
+
+    Nothing is passed when ffmpeg is already on PATH, because yt-dlp finds it and an
+    explicit location is one more thing that can be wrong. The option matters on Windows,
+    where ffmpeg is usually a folder of extracted binaries nobody added to PATH.
+    """
+    location = ffmpeg_location(config)
+    if not location:
+        return []
+    if shutil.which("ffmpeg") and not str(config.get("ffmpeg_location") or "").strip():
+        return []
+    return ["--ffmpeg-location", location]
 
 
 def build_tuning_args(config: dict[str, Any]) -> list[str]:
@@ -174,6 +191,7 @@ def build_download_command(
         "--no-overwrites",
         *build_metadata_args(config),
         *build_tuning_args(config),
+        *build_ffmpeg_args(config),
         *build_archive_args(config),
         "--paths",
         download_dir,
@@ -216,9 +234,8 @@ def run_streaming_command(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
         env=env,
+        **process_kwargs(bufsize=1),
     )
     token.register(process)
     output_lines: list[str] = []
@@ -241,10 +258,28 @@ def run_streaming_command(
 
 
 def infer_output_path(output_lines: list[str]) -> str | None:
+    """The finished file, read back from what `--print after_move:filepath` wrote.
+
+    The test used to be that the line starts with "/", which is true of every absolute
+    path on Linux and of none on Windows, where they start with a drive letter or a UNC
+    prefix. So on Windows the download succeeded and the file path was never recorded.
+    Asking pathlib whether the line names something absolute that exists is the same test
+    without the assumption, and it rejects yt-dlp's progress lines just as firmly.
+    """
     for line in reversed(output_lines):
         candidate = line.strip()
-        if candidate.startswith("/") and Path(candidate).exists():
-            return candidate
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate)
+        except (OSError, ValueError):
+            continue
+        try:
+            if path.is_absolute() and path.exists():
+                return candidate
+        except OSError:
+            # A line long enough or odd enough to upset the file system is not a path.
+            continue
     return None
 
 
@@ -342,7 +377,7 @@ def download_one(
                 "action": "download",
                 "user_input": source_name,
                 "script_version": APP_VERSION,
-                "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
+                "system_info": system_info(),
             },
         )
         safe_log(logger, f"[{now_string()}] [ERR] Download failed: {title}")
@@ -415,7 +450,7 @@ def download_many(
                         "action": "download_many",
                         "user_input": source_name,
                         "script_version": APP_VERSION,
-                        "system_info": os.uname().sysname if hasattr(os, "uname") else os.name,
+                        "system_info": system_info(),
                     },
                 )
                 safe_log(logger, f"[{now_string()}] [ERR] Unexpected download error for {target.url}: {exc}")

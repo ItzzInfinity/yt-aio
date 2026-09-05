@@ -51,7 +51,7 @@ from ...ui.widgets import muted
 from ...utils.browser_cookies import describe as describe_browser
 from ...utils.config_manager import SETTING_RANGES, SETTING_SUGGESTIONS, build_default_config
 
-DIRECTORY_KEYS = {"default_download_path", "logs_directory", "cookie_fallback_home", "info_cache_dir"}
+DIRECTORY_KEYS = {"default_download_path", "logs_directory", "cookie_fallback_home", "info_cache_dir", "ffmpeg_location"}
 FILE_KEYS = {"log_file_path", "history_file_path", "cookie_file", "download_archive_path"}
 
 HELP = {
@@ -79,6 +79,7 @@ HELP = {
     "info_cache_max_age_hours": "How long a cached file counts as fresh. Zero means it never expires.",
     "enable_download_archive": "Let yt-dlp refuse anything it has already fetched. The database check stays either way.",
     "download_archive_path": "One line per fetched video. A relative path resolves from yt_aio/application.",
+    "ffmpeg_location": "Folder holding ffmpeg and ffprobe. Empty is right when they are on PATH.",
     "preferred_audio_codec": "Ranked first when several audio streams exist. Empty means no codec preference.",
     "concurrent_fragments": "Fragments fetched at once for a single file. The main speed-up on large files.",
     "download_retries": "yt-dlp's own retries, separate from max_retries, which re-runs the whole command.",

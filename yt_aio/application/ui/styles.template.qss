@@ -1,7 +1,6 @@
 QWidget {
     background: @surface@;
     color: @text@;
-    font-family: @font_family@;
     font-size: @font_size@;
 }
 

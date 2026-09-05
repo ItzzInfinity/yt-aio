@@ -9,6 +9,14 @@ from typing import Any
 # keeps the theme roster in one place without making a cycle.
 from ..ui.theme import DEFAULT_THEME, theme_names
 from .browser_cookies import CHROMIUM_BROWSERS, all_profile_names, cookie_home_suggestions
+from .external_tools import ffmpeg_location as _detected_ffmpeg
+
+
+def _ffmpeg_suggestion() -> list[str]:
+    """Offer the directory ffmpeg was actually found in, when there is one."""
+    found = _detected_ffmpeg()
+    return [found] if found else []
+
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +74,7 @@ SETTING_SUGGESTIONS: dict[str, list[str]] = {
     "default_audio_quality": ["m4a", "mp3", "opus", "vorbis", "flac", "wav", "aac", "alac", "best"],
     "preferred_audio_codec": ["aac", "opus", "mp3", "flac", "vorbis", "alac", ""],
     "limit_rate": ["", "500K", "1M", "2M", "5M", "10M"],
+    "ffmpeg_location": ["", *(_ffmpeg_suggestion() or [])],
     "log_level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "proxy": [
         "",
@@ -189,6 +198,7 @@ def build_default_config() -> dict[str, Any]:
         "fragment_retries": 10,
         "limit_rate": None,
         "restrict_filenames": False,
+        "ffmpeg_location": None,
         "enable_download_archive": True,
         "download_archive_path": "./db/downloaded.txt",
         "ui_theme": DEFAULT_THEME,

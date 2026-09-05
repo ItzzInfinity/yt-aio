@@ -1,1 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Notes that are not part of the project
 dev_guide.md
+context.md
+
+# Everything the application generates at runtime. All of it is per-machine: the config
+# holds absolute download paths, the database holds one person's library, and the caches
+# hold whatever that person fetched. A clone must start empty and build its own.
+yt_aio/application/config/config.json
+yt_aio/application/db/*.db
+yt_aio/application/db/*.db-wal
+yt_aio/application/db/*.db-shm
+yt_aio/application/db/downloaded.txt
+yt_aio/application/db/info_cache/
+yt_aio/application/logs/*
+!yt_aio/application/logs/.gitkeep

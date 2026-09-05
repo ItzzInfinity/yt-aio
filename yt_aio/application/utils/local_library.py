@@ -25,6 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .external_tools import find_tool
+from .shared import process_kwargs
+
 LogFn = Callable[[str], None]
 
 # .webm is here because yt-dlp's bestaudio commonly lands as opus in a webm container.
@@ -179,13 +182,18 @@ def _read_with_mutagen(path: Path) -> dict[str, Any] | None:
 
 def _read_with_ffprobe(path: Path) -> dict[str, Any] | None:
     """Last resort for a container mutagen will not open."""
+    executable = find_tool("ffprobe")
+    if executable is None:
+        # Not installed. mutagen already had its turn, so this file simply has no tags.
+        return None
+
     command = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
+        executable, "-v", "quiet", "-print_format", "json",
         "-show_format", "-show_streams", str(path),
     ]
     try:
         completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT, check=False
+            command, capture_output=True, timeout=FFPROBE_TIMEOUT, check=False, **process_kwargs()
         )
     except (OSError, subprocess.SubprocessError):
         return None

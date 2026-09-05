@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yt-aio"
+version = "0.6.0"
+description = "A desktop front end for yt-dlp: fetch a channel or playlist, download it, and keep a searchable music library."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ItzzInfinity" }]
+keywords = ["yt-dlp", "youtube", "downloader", "music-library", "pyqt"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+# PyQt6 is the default. The application also runs on PyQt5 through the fallback in
+# application/ui/qt.py, so a machine that already has PyQt5 needs no second binding;
+# there is no way to express "either of these" in a dependency list, so PyQt6 is named
+# and the fallback stays as a convenience rather than a supported install path.
+dependencies = [
+    "PyQt6>=6.4",
+    "yt-dlp>=2024.1.1",
+    "mutagen>=1.45",
+]
+
+[project.optional-dependencies]
+# PyQt5 instead of PyQt6, for a machine where PyQt6 will not build.
+qt5 = ["PyQt5>=5.15"]
+
+[project.urls]
+Homepage = "https://github.com/ItzzInfinity/yt_aio"
+Issues = "https://github.com/ItzzInfinity/yt_aio/issues"
+
+[project.scripts]
+yt-aio = "yt_aio.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["yt_aio*"]
+
+# The style sheet template is data, not code, and setuptools will not ship it otherwise.
+[tool.setuptools.package-data]
+"yt_aio.application.ui" = ["*.qss"]

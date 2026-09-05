@@ -1,7 +1,38 @@
 <!-- Functional Specification Document -->
 # 1. Project name: YT AIO
 
-## Current state — 2026-09-05 (session 2) — fixed the two regressions reported in 1.6
+## Current state — 2026-09-05 (session 3) — Windows compatibility and clone-and-run
+
+- **Current phase:** 1.10 roadmap complete. Runs on Windows, macOS and Linux from a fresh clone.
+- **Last completed task:** I2, the README rewrite, plus undoing the font regression found while verifying H5.
+- **Next task:** Nothing pending. Commit, push, then clone it on an actual Windows machine and run it, which is the one thing that cannot be checked from here.
+
+### Session summary
+1. **G — clone-and-run.** 45 files left the git index: 42 `__pycache__` entries, a 9.7 MB personal library database, a `config.json` holding one machine's absolute download path, and the download archive. Added `pyproject.toml`, `requirements.txt` and a real `.gitignore`. A clean tree of 69 files now runs `python -m yt_aio` and builds its own config and database.
+2. **H — Windows correctness.** Every subprocess decodes UTF-8 instead of the system code page, which was a guaranteed crash on the first non-ASCII title. The finished-file path no longer has to start with `/`. Console windows are suppressed. Browser profiles are found where Windows and macOS keep them, including Chromium's newer `Network/Cookies` location. `os.uname()` is gone. ffmpeg and ffprobe are located rather than assumed.
+3. **I — telling the user.** A preflight that names what is missing and how to install it, and a README with per-platform instructions.
+
+**Gotchas learned this session:**
+- **`text=True` is not enough.** It decodes with the locale encoding, which is UTF-8 here and the ANSI code page on Windows. yt-dlp writes UTF-8, so on Windows the first Bengali, Hindi or accented title raises UnicodeDecodeError mid-listing. Always state `encoding="utf-8"`, and `errors="replace"` so one odd byte costs a character rather than the run.
+- **Naming a font family is riskier than naming none.** Qt takes the first family that exists and its fallback for missing glyphs is poorer than its first-choice matching. Naming `Noto Sans` broke Bengali conjuncts because that face is installed here without Bengali shaping tables. With no family set, Qt picks the platform UI font and shapes every script correctly. The Qt warning about missing OpenType support was printed but easy to miss; the screenshot was what caught it.
+- **A start-up check cannot import the package it is checking.** The preflight exists to say "PyQt is not installed", so it must reach PyQt on no import path of its own. `application/utils/__init__.py` re-exported eagerly and pulled in PyQt through the panels, so it had to become lazy first. That also removed the db-to-utils cycle noted in session 1.
+- **`git ls-files` lists tracked files only.** Testing a clone by building a tree from the index silently omits everything not yet staged, which made a passing test fail for the wrong reason. Stage new files before testing what a clone contains.
+- **setuptools 59 reads no PEP 621 metadata and says nothing.** A `--no-build-isolation` build produced `UNKNOWN-0.0.0` with no error. Build with isolation, which is what `pip install` does anyway.
+
+### Partially done
+- none
+
+### Blocked
+- **Actually running on Windows.** Everything platform-specific was verified by faking the platform: `sys.platform`, `%LOCALAPPDATA%`, and fabricated Brave, Chrome and winget directory trees. That covers the logic but not the environment.
+
+### Next step (exact)
+Commit and push. Then on a Windows machine: `git clone`, `python -m pip install -r requirements.txt`, `winget install Gyan.FFmpeg`, `python -m yt_aio`. Confirm the window opens, fetch a playlist that has a non-ASCII title in it, and download one track. Those three prove the UTF-8 decoding, the ffmpeg discovery and the output-path detection together.
+
+### Assumptions
+- PyQt6 is the declared dependency and PyQt5 stays a fallback rather than a supported install path, because a dependency list cannot express "either of these".
+- The personal database and config are untracked, not deleted. Both are still on disk and the application keeps using them.
+
+## Previous state — 2026-09-05 (session 2) — fixed the two regressions reported in 1.6
 
 - **Current phase:** 1.6 items 10 and 11 closed. Roadmap clear.
 - **Last completed task:** F2, separating the Settings help text from the config keys.
@@ -354,6 +385,31 @@ The bullets above stay as written and are annotated in place when the whole requ
 ### E. Brave cookies
 - [x] E1 — Detect the Brave profile and cookie paths and offer them in the Settings tab — done 2026-09-05; new `utils/browser_cookies.py` knows the three layouts a browser can have on Linux and tests for an actual cookie file rather than a directory, which matters here: `~/.config/BraveSoftware/Brave-Browser` exists on this machine and holds no profile at all, while the real cookies are in the snap revision `~/snap/brave/678`. `cookie_fallback_home` and `cookie_fallback_profile` are now filled from what is installed instead of from a guessed list, and the Settings tab prints under the browser field exactly what was found and what to set. The extractor's own snap-only lookup was replaced by the shared one, so flatpak and package installs are handled too. Verified: `brave` resolves to the snap revision, `chrome` correctly resolves to no override because it is a package install, and an explicit home still wins.
 - [x] E2 — Balance the Library filter row — done 2026-09-05; noticed while screenshotting E1. The channel drop-down was built by hand with no stretch, so a 2000-entry list gave it a size hint that swallowed the row and left the search box 40 pixels wide. It now goes through the same builder as the three new lookups, which also caps a drop-down at 340 pixels, and the hand-rolled setup and its duplicate refill code are gone.
+
+## 1.10. Roadmap — run on Windows, and run from a fresh clone
+
+Goal: someone clones the repository on Windows, macOS or Linux, installs the
+dependencies, runs `python -m yt_aio`, and the application starts and works. Today it
+does not, for two separate reasons: five subprocess calls decode yt-dlp's output with the
+system code page, which crashes on any non-ASCII title on Windows, and the repository
+ships generated files that carry one particular machine's absolute paths.
+
+### G. Clone-and-run
+- [x] G1 — Untrack generated and machine-specific files, and write a real `.gitignore` — done 2026-09-05; 45 files left the index and stayed on disk: 42 `__pycache__` entries, the 9.7 MB `yt_aio.db` holding one person's 3490-song library, `config.json` carrying `/home/itzzinfinity/Downloads` as an absolute path, and `downloaded.txt`. A clone now contains 65 files, all source and documentation. The logs directory keeps its `.gitkeep` so the directory still arrives; only its contents are ignored.
+- [x] G2 — Add `pyproject.toml` and `requirements.txt` declaring every dependency — done 2026-09-05; PyQt6, yt-dlp and mutagen, `requires-python >=3.10`, a `qt5` extra for a machine where PyQt6 will not build, and a `yt-aio` console script. Verified by building a wheel: metadata correct, all 38 modules present, and `styles.template.qss` shipped, which it would not have been without the package-data entry. Note that setuptools 59 on this machine is too old to read PEP 621 metadata and silently produced an `UNKNOWN-0.0.0` wheel with `--no-build-isolation`; the isolated build, which is what `pip install` does by default, is correct.
+- [x] G3 — First run on a clean machine creates its own config, database and directories — done 2026-09-05; no code change was needed, only the untracking in G1: `ensure_config` already wrote a default config and `init_db` already created the schema, but a committed `config.json` meant a clone inherited someone else's absolute download path instead. Verified by building a clean tree from the git index, which contains no database, config or cache, and running it: all six tabs opened, and it created its own config and database with `default_download_path` resolved from `Path.home()` on the running machine.
+
+### H. Windows correctness
+- [x] H1 — Decode every subprocess as UTF-8 instead of the system code page — done 2026-09-05; new `process_kwargs` in `utils/shared.py` is now the only way this application starts a process, and all five sites use it. `text=True` on its own decodes with the locale encoding, which is UTF-8 here and the ANSI code page on Windows, so the first non-ASCII title raised UnicodeDecodeError mid-listing and took the batch with it. Demonstrated with a real title from the library: decoding those bytes as cp1252 fails on byte 0x8d, and the same video now fetches correctly through the batched path. `errors="replace"` means an unexpected byte costs one character rather than the run.
+- [x] H2 — Stop `infer_output_path` assuming a path starts with `/` — done 2026-09-05; true of every absolute path on Linux and of none on Windows, where they start with a drive letter, so on Windows every download succeeded and no file path was ever recorded. It now asks pathlib whether the line is absolute and exists, which rejects yt-dlp's progress lines just as firmly. Checked against a real file, a relative path, a Windows path, a progress line and no output at all.
+- [x] H3 — Hide the console window each subprocess opens on Windows — done 2026-09-05; `process_kwargs` adds CREATE_NO_WINDOW on Windows only, so yt-dlp does not blink a console on screen once per download and once per metadata batch. Nothing is lost, because stdout and stderr are piped and the Downloader tab shows every line. Verified by faking the platform: the flag appears on Windows and is absent elsewhere.
+- [x] H4 — Find Brave and the other browsers where Windows actually keeps them — done 2026-09-05; `browser_cookies.py` now holds a per-platform table for seven Chromium-family browsers plus Firefox, covering `%LOCALAPPDATA%` and `%APPDATA%` on Windows and Application Support on macOS. It also checks `<profile>/Network/Cookies`, which is where Chromium moved the database and which the old code missed entirely. On Windows and macOS no HOME override is returned, because yt-dlp finds those itself; only a snap or flatpak needs pointing at. Verified against fabricated Windows and macOS layouts, including a Guest Profile with no cookie file being correctly ignored, with Linux behaviour unchanged.
+- [x] H5 — Replace `os.uname()` and the Debian font-package name with portable equivalents — done 2026-09-05; `os.uname()` does not exist on Windows and the three guarded call sites fell back to `os.name`, which reports `nt` and says nothing. One `system_info()` built on `platform` replaces them and reports the release and the Python version too. Separately the style sheet asked for the font family `fonts-dejavu-core`, which is a Debian package name and matched nothing on any machine. Replacing it with a named stack was worse and had to be undone: Qt takes the first family that exists, and with `Noto Sans` named a Bengali title rendered with broken conjuncts, because that face is installed here without Bengali shaping tables. Rendering the same string with no family set is correct, so the declaration is gone entirely and Qt uses its own default, which is Segoe UI on Windows and the system font elsewhere. Caught by screenshotting the library, which is full of Bengali and Hindi titles, rather than by the warning Qt printed.
+- [x] H6 — Locate ffmpeg and ffprobe, and say so plainly when they are missing — done 2026-09-05; new `utils/external_tools.py` tries the `ffmpeg_location` setting, then PATH, then a `bin` folder beside the project, then the directories winget, Chocolatey, Scoop and Homebrew use. `--ffmpeg-location` is passed only when PATH does not already have it. ffprobe in Local Scan is resolved rather than assumed, and returns no tags instead of raising when it is genuinely absent. All five discovery paths tested, including a fabricated winget shim directory.
+
+### I. Telling the user
+- [x] I1 — A start-up preflight that names what is missing instead of failing obscurely — done 2026-09-05; new `yt_aio/preflight.py` runs from `__main__` before the shell is imported, because importing the shell reaches PyQt on its third line and a check that runs afterwards never runs on the machine that needs it. It separates what blocks start-up, the Python version, a Qt binding and yt-dlp, from what only limits it, mutagen and ffmpeg, and prints the pip command for each. Enabling this meant making `application/utils/__init__.py` lazy: its eager re-exports pulled in PyQt through the panels, so the check could not run without the thing it checks for. That also removes the db-to-utils import cycle noted in session 1. Verified both ways: a healthy machine prints nothing and starts, and a machine with nothing installed gets named requirements and exit code 1.
+- [x] I2 — Rewrite `README.md` with per-platform install and run instructions — done 2026-09-05; copy-pasteable clone-install-run blocks for Windows, macOS and Linux, four ways to satisfy ffmpeg on Windows, the note that `python3` is not usually a Windows command, what the preflight prints when something is missing, what the first run creates, and a layout table. The old README described a `styles.qss` that no longer exists and listed the config and database as project files when they are now generated. Every documentation link and every path in the layout table was checked to exist.
 
 ## Self-check
 
