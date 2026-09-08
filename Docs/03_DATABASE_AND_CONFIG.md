@@ -214,4 +214,47 @@ At application startup, the **[ConfigManager](file:///home/itzzinfinity/GitHub/y
 
 This design makes the entire repository highly portable; you can clone the repository, run it anywhere, and all DB schemas and configuration paths spin up relative to the new workspace automatically.
 
+---
+
+## 6. Backfilling a Thin Database
+
+`fetch_full_metadata` is off by default, so a library built from playlist listings stores
+an id, a title, a thumbnail and a URL, and leaves upload date, duration, channel and
+bitrate blank. Nothing in the application goes back to finish those rows.
+**[backfill.py](file:///home/itzzinfinity/GitHub/yt_aio/yt_aio/application/db/backfill.py)**
+does, keyed on `video_id`:
+
+```bash
+python -m yt_aio.application.db.backfill --dry-run     # report only, writes nothing
+python -m yt_aio.application.db.backfill               # local passes, seconds
+python -m yt_aio.application.db.backfill --network     # ask yt-dlp for the rest
+python -m yt_aio.application.db.backfill --network --limit 2000
+```
+
+It runs in two halves. The **local passes** move facts already in the file between tables:
+`songs` and `youtube_video_information` fill each other's gaps, a download row learns its
+cache row and its file, a local file learns the `video_id` its matched cache row knows.
+The **network pass** (`--network`) is one yt-dlp lookup per remaining video, so it is
+opt-in, resumable, and honours `--limit`.
+
+| Flag | Effect |
+|:---|:---|
+| `--dry-run` | Counts what each pass would fill, writes nothing. |
+| `--network` | Fetches the videos the local passes cannot finish. |
+| `--limit N` | Caps the network pass. Re-run to continue where it stopped. |
+| `--derive-albums` | Infers album year and artwork from the album's own tracks. |
+| `--refresh` | Lets a fetch replace stored values, not only fill blank ones. |
+| `--no-backup` | Skips the pre-run backup copy. |
+
+Every write merges: a column is only set when it is blank, so re-running is safe and an
+interrupted run costs only its unfetched tail. `--refresh` is the one flag that overrides
+that, and it exists for values that are stale rather than missing.
+
+Three things the script deliberately leaves alone, because a `video_id` cannot answer for
+them: `youtube_video_information.playlist_name` (a property of the listing, not the
+video), `songs.album_id` (needs YouTube Music album data), and `artists.thumbnail_url` /
+`artists.channel_url` (need a channel lookup).
+
+---
+
 **Next Guide:** Read **[04_CONTRIBUTING_AND_ERRORS.md](04_CONTRIBUTING_AND_ERRORS.md)**
