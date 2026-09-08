@@ -15,8 +15,8 @@ env/
 Thumbs.db
 
 # Notes that are not part of the project
-dev_guide.md
-context.md
+
+context2.md
 
 # Everything the application generates at runtime. All of it is per-machine: the config
 # holds absolute download paths, the database holds one person's library, and the caches
