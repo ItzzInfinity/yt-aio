@@ -264,9 +264,14 @@ def _library_filters(
     elif completeness == "partial":
         clauses.append("COALESCE(v.is_full_metadata, 0) = 0")
     elif completeness == "downloaded":
-        clauses.append("EXISTS (SELECT 1 FROM downloads d WHERE d.video_info_id = v.id AND d.status = 'success')")
-    elif completeness == "never downloaded":
-        clauses.append("NOT EXISTS (SELECT 1 FROM downloads d WHERE d.video_info_id = v.id AND d.status = 'success')")
+        # `songs.downloaded`, not the download history (FSD 1.8.4). The two answer
+        # different questions: history says a file was written at some point, the flag
+        # says the file is in the local music library now. The Downloads column beside
+        # this filter still counts history rows, which is the other question and is
+        # worth keeping, so a song can honestly show two downloads and no flag.
+        clauses.append("EXISTS (SELECT 1 FROM songs s4 WHERE s4.video_id = v.video_id AND s4.downloaded = 1)")
+    elif completeness == "not downloaded":
+        clauses.append("NOT EXISTS (SELECT 1 FROM songs s4 WHERE s4.video_id = v.video_id AND s4.downloaded = 1)")
     elif completeness == "liked":
         clauses.append("EXISTS (SELECT 1 FROM songs s3 WHERE s3.video_id = v.video_id AND s3.liked = 1)")
     elif completeness == "not liked":
@@ -515,7 +520,11 @@ def _song_payload_from_import(row: dict[str, Any]) -> dict[str, Any]:
         # override whatever an older import left behind (FSD 1.12).
         "liked": "Liked" in collections,
         "in_library": "Library" in collections,
-        "downloaded": "Downloaded" in collections,
+        # `downloaded` is deliberately absent (FSD 1.8.4). A backup describes a phone,
+        # and its Downloaded collection says a file existed there, not that one exists
+        # here. The only thing that can see this disk is the Local Scan, so that is the
+        # only writer of the flag. The Import grid still shows the Downloaded label,
+        # because there it describes the backup being looked at.
         "origin": row.get("origin") or "import",
     }
     if credited:

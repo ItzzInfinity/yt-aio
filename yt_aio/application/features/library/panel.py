@@ -86,8 +86,11 @@ COMPLETENESS = {
     "Not liked": "not liked",
     "Full metadata only": "full",
     "Partial metadata only": "partial",
+    # "Not downloaded" rather than "Never downloaded": the flag now means the file is in
+    # the local music library (FSD 1.8.4), so a song downloaded last year and since
+    # deleted belongs on this side of the filter, and "never" would be a false claim.
     "Downloaded": "downloaded",
-    "Never downloaded": "never downloaded",
+    "Not downloaded": "not downloaded",
 }
 
 # What the Liked column shows. A tick reads faster than the word at a glance, and the

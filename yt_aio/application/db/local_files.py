@@ -22,7 +22,14 @@ from typing import Any, Callable
 
 from ..utils.local_library import LocalTrack, normalise_title
 from ..utils.shared import now_string
-from .database_manager import _batched, _connect, _row_to_dict, _table_columns, init_db
+from .database_manager import (
+    _batched,
+    _connect,
+    _row_to_dict,
+    _table_columns,
+    clear_stale_downloaded_flags,
+    init_db,
+)
 
 LogFn = Callable[[str], None]
 
@@ -250,6 +257,14 @@ def record_scan(
         log(f"{new_since_last_scan} file(s) were not here at the previous scan of this folder.")
     if removed:
         log(f"{removed} file(s) recorded by an earlier scan are no longer on disk; forgotten.")
+
+    # A forgotten file is a song that is no longer downloaded (FSD 1.8.4). Done after the
+    # write rather than inside it, so the flag is settled against the index as it now
+    # stands, and run even when nothing was forgotten, because a folder can also stop
+    # being scanned entirely.
+    unflagged = clear_stale_downloaded_flags(db_path)
+    if unflagged:
+        log(f"{unflagged} song(s) are no longer flagged as downloaded; their file is gone.")
 
     return {
         "root_path": str(root_path),

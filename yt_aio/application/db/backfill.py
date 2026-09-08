@@ -238,15 +238,11 @@ LOCAL_PASSES: tuple[Pass, ...] = (
             "EXISTS (SELECT 1 FROM local_files lf WHERE lf.video_id = s.video_id)"
         ),
     ),
-    Pass(
-        label="songs downloaded <- download history",
-        table="songs AS s",
-        assignments=f"downloaded = 1, last_updated = {SQL_STAMP}",
-        predicate=(
-            "s.downloaded = 0 AND EXISTS ("
-            "  SELECT 1 FROM downloads d WHERE d.video_id = s.video_id AND d.status = 'success')"
-        ),
-    ),
+    # There is deliberately no "songs downloaded <- download history" pass (FSD 1.8.4).
+    # A successful row in `downloads` says a file was written once, not that it is in the
+    # music library now: it may have been moved, renamed, deleted or sent to a phone. The
+    # flag is raised by `Local Scan -> Add to database` and by nothing else, and
+    # `clear_stale_downloaded_flags` lowers it again when the local index stops holding it.
     Pass(
         label="songs bitrate <- local files",
         table="songs AS s",

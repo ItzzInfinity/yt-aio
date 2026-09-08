@@ -1,7 +1,37 @@
 <!-- Functional Specification Document -->
 # 1. Project name: YT AIO
 
-## Current state — 2026-09-05 (session 5) — liked songs from OpenTune and ViTune
+## Current state — 2026-09-08 (session 6) — downloaded means the file is on this disk
+
+- **Current phase:** 1.13 complete. `downloaded` means the file is in the local music library and nothing else.
+- **Last completed task:** O5, the end-to-end verification on a copy of the live database.
+- **Next task:** Nothing pending in the roadmap. Start the application once so `init_db` repairs the live database, then rescan `~/Downloads/my_music/downloaded` and press `Add to database` to flag what is really there.
+
+### Session summary
+1. O1 — the Import payload dropped the `downloaded` key, and `upsert_songs` moved the flag out of the `MAX` conflict clause into the same override UPDATE `liked` uses. It now only changes when a payload names it.
+2. O2 — the two history-driven writers are gone: the revival seeds every song at 0, and the `songs downloaded <- download history` backfill pass was removed and replaced with a comment saying why it should not come back.
+3. O3 — `clear_stale_downloaded_flags` lowers the flag for any song the local index no longer holds, from `init_db` and from the end of `record_scan`. It only ever lowers; raising stays with the operator pressing `Add to database`.
+4. O4 — the Library `Downloaded` filter reads `songs.downloaded` instead of the download history, and `Never downloaded` was relabelled `Not downloaded`.
+5. O5 — verified on a copy of the live database, on the real OpenTune backup, and on a three-file round trip through scan, add, delete and rescan.
+
+**Gotchas learned this session:**
+- `python -m compileall -q yt_aio`, the project's own self-check, was failing before any of this on `db/tempCodeRunnerFile.py`, a committed VS Code Code Runner artifact holding one indented line of a shell command. It is not a module and nothing imports it. Removed.
+- The four writers of `downloaded` were spread across four files and only one of them mentioned the local library, which is how the flag drifted to 8895 on a machine holding 3612 identified files. Grep for the column name, not for the word download.
+- `local_files` prunes rows for files that disappeared only when `forget_missing` is set, which is the default, so it is a trustworthy present-on-disk index. That is what makes the lowering pass one cheap UPDATE rather than a filesystem walk.
+
+### Partially done
+- none
+
+### Blocked
+- none
+
+### Next step (exact)
+Run the application. `init_db` will take `songs.downloaded` from 8895 to about 3568 on the live database. Then open Local Scan, rescan `/home/itzzinfinity/Downloads/my_music/downloaded`, and press `Add to database` with no filters set; the log should report roughly 3612 files with a video id and the newly flagged count. Check the Library `Show` drop-down: `Downloaded` and `Not downloaded` should now split on that flag.
+
+### Assumptions
+- A download this application performs does not flag itself. FSD 1.8.4 names `local scan -> add to database` as the gate, and the download folder is not necessarily the music library. If you want a finished download to flag itself, say so and it becomes a scan of the output path at the end of a job.
+
+## Previous state — 2026-09-05 (session 5) — liked songs from OpenTune and ViTune
 
 - **Current phase:** 1.12 complete. Liked is carried, filterable and overridden by a re-import.
 - **Last completed task:** N4, the Library Liked column and filter.
@@ -412,6 +442,10 @@ Run `python3 -m pip install -U yt-dlp`, sign in to YouTube in Brave once, then s
 - If video id is not present then add them in a different table so they will be logged but not interfere with direct access to the query and give false positive for the existing audio files in the database. - **Done** as `local_only_tracks`, keyed on the file path. Exactly the reasoning you gave: a song in `songs` has a YouTube identity that can be looked up and re-fetched, a file with only an ID3 tag has none, and mixing them would make a title collision read as a match it is not. Three untagged files in the test folder landed there with none reaching `songs`.
 - in `Library` Tab until I click select all on this page it wont allow me to delete the selected audio files from the database. - **Fixed**. Root cause: nothing watched the individual tick boxes, so the only code path that ever enabled `Delete selected` was the select-all checkbox. Deleting one row meant selecting the whole page and unticking the rest. The grid's own change signal now drives the button. Two traps on the way: filling the grid fires that signal for every cell and none of those are selections, so `_render` blocks it; and declaring the slot as taking `object` makes Qt refuse the connection outright, because the signal carries a table item.
 
+### 1.8.4 `Downloaded` Needs Concern
+- The app should only flag **downloaded** those ones which are present in local music library (e.g. Laptop or PC) after `local scan` --> `add to database` - **Done**. `Local Scan -> Add to database` is now the only writer that can raise the flag, and a song whose file has left the local index loses it again, checked on every start and after every scan. Root cause of the 8895 wrong flags on your database: three of the four things that set the flag had never looked at this disk. An OpenTune backup's Downloaded collection describes a phone, the revival seeded from the `downloads` history, and a backfill pass re-raised it from the same history afterwards. History records that a file was written once, which is a different claim from the file being here now. On your data the truth is 3568. One consequence worth knowing: a download this app performs does not flag itself either, because nothing has yet seen the file where the library lives, so it turns up on the next scan and add.
+- Backup files which are added to main db should not flag **downloaded** as **1** - **Done**. The import payload no longer carries the key at all, and `downloaded` left the `MAX` merge that made the flag one-way, so a wrong 1 can now be corrected instead of being permanent. Verified with your real OpenTune backup: 5729 of its 15691 items claim Downloaded and the count in the database did not move. The Import grid still shows the Downloaded label, because there it describes the backup on screen rather than this laptop.
+
 ## 1.9. Roadmap — batch from FSD 1.8.2 (line 243 onwards)
 
 The five requests at the end of `1.8.2` are split here into atomic tasks. One task per
@@ -510,6 +544,27 @@ only authority on what is liked, and no authority at all on what is on this disk
 - [x] N2 — `upsert_songs` overrides `liked` when a payload names it and leaves it alone when silent — done 2026-09-05; `liked` is deliberately absent from the conflict clause and settled by a follow-up UPDATE, which is what lets a 1 become a 0. `MAX`, the rule `downloaded` uses, would make the flag one-way and unliking impossible. The two differ because a backup is the sole authority on what is liked and no authority at all on what is on this disk. Verified across eight cases: liking, unliking, re-liking, a silent listing leaving it alone, `downloaded` still refusing to go back to 0, and a new row from a silent source starting at 0.
 - [x] N3 — The Import path sends `liked`, and says how many flags it changed — done 2026-09-05; the key is always present, never conditional, so a song a backup does not list as liked arrives as an explicit False and overrides what an older import left. Added and removed are counted apart rather than as one number, because overriding means the last backup wins for every song two backups share. On the real files: ViTune contributed 686 likes, then OpenTune added 67 and removed 334, leaving 419. Re-importing the same backup changed nothing, and unliking one song on the phone propagated as a single removal.
 - [x] N4 — Library: a Liked column and a Liked filter, both resolved in SQL — done 2026-09-05; a Liked column showing a heart, `Liked` and `Not liked` in the Show drop-down, and a sort key, all as correlated subqueries against `songs` so paging stays correct. Measured on 21980 rows: the filter returns 419 in 0.10s and the sort runs in 0.04s, and it composes with the artist filter, giving 23 liked songs credited to Arijit Singh. Checked in the running application.
+
+## 1.13. Roadmap — batch from FSD 1.8.4
+
+`songs.downloaded` currently means "some evidence once suggested this was downloaded",
+which is why 8858 rows carry it on a machine that holds far fewer files. Four sources
+raise it: an OpenTune backup's Downloaded collection, the revival seed from the
+`downloads` history, the `songs downloaded <- download history` backfill pass, and the
+Local Scan `Add to database` button. Only the last one has ever looked at this disk.
+
+1.8.4 settles the meaning: **the file is in the local music library**. So the flag is
+raised by exactly one action, `Local Scan -> Add to database`, and it is lowered again
+whenever the local index no longer holds the file. A backup describes a phone; it is no
+authority at all on what is on this laptop. Consequence worth stating: a download this
+app performs does not raise the flag by itself either, because nothing has yet seen the
+file where the library lives. The next scan and add does that.
+
+- [x] O1 — Import stops sending `downloaded`, and `upsert_songs` only changes the flag when a payload names it — done 2026-09-08; the key is gone from `_song_payload_from_import`, so a backup's Downloaded collection now only colours the Import grid, and `downloaded` left the `MAX` conflict clause to be settled by the same follow-up UPDATE `liked` uses. The two now share one loop and differ from `in_library`, which still merges. Verified on six cases: an import claiming Downloaded left the flag at 0, a local add raised it, a silent listing left it alone, an explicit False lowered it, and a new row from a silent source started at 0.
+- [x] O2 — The two history-driven sources stop raising it: the revival seed and the `songs downloaded <- download history` backfill pass — done 2026-09-08; the revival now seeds every song at 0 instead of consulting `downloads`, and the backfill pass is gone, replaced by a comment saying why there will not be another. A successful download row says a file was written once, which is not the same claim as the file being in the music library now: it can be moved, renamed, deleted or copied to a phone. Both sites keep the reasoning inline so the pass does not get reinstated by someone reading the schema alone.
+- [x] O3 — A song with no file in the local index loses the flag, from `init_db` and after every scan, which also repairs the databases that already have it wrong — done 2026-09-08; `clear_stale_downloaded_flags` is one UPDATE against `local_files` by video id, called from `init_db` and from the end of `record_scan`, and it only ever lowers. The asymmetry is the point: raising is the operator pressing `Add to database` on the files the filters match, lowering is arithmetic on what is still there, so a file deleted outside the application, a forgotten folder and an unplugged drive all end the same way. Verified on a built database: a song with a local file kept the flag, one without lost it, a re-run changed nothing, and deleting the local row took the last flag with it.
+- [x] O4 — The Library `Downloaded` / `Never downloaded` filters read `songs.downloaded` instead of the download history — done 2026-09-08; both branches became correlated subqueries against `songs`, matching the shape the Liked filter already uses, so the drop-down and the flag finally answer the same question. `Never downloaded` is now labelled `Not downloaded`, because a song fetched last year and since deleted belongs on that side and `never` would be a lie. The Downloads column still counts history rows and is left alone: a song can honestly show two downloads and no flag. Verified on a database where both videos had a successful download row and only one had a file: the filters returned one each.
+- [x] O5 — Verify the whole rule end to end on a copy of the real database — done 2026-09-08; on a copy of the live database the repair took 8895 flags down to 3568, which is exactly the set that has a file in `local_files`, leaving songs, likes and credits untouched and running again in 0.70s with nothing left to do. Then the real OpenTune backup, 15691 items of which 5729 claim the Downloaded collection, was imported into that copy and raised no flag at all while still moving 54 likes in and 354 out. Finally the full round trip on three real files: scanning alone flagged nothing, `Add to database` flagged all three, and deleting one file and rescanning lowered that one flag and left the other two.
 
 ## Self-check
 

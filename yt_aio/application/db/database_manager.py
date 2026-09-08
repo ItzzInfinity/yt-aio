@@ -193,6 +193,45 @@ def _drop_retired_columns(conn: sqlite3.Connection) -> None:
                 pass
 
 
+def _clear_stale_downloaded(conn: sqlite3.Connection) -> int:
+    """Lower `songs.downloaded` for every song the local index no longer holds.
+
+    `downloaded` means one thing (FSD 1.8.4): the file is in the local music library.
+    Only `Local Scan -> Add to database` can raise it, because only a scan has looked at
+    this disk. Nothing but this can lower it, so it lives here rather than in the scan:
+    a file deleted outside the application, a folder forgotten, a drive left unplugged
+    through a rescan, all end the same way, with a `local_files` row that stops existing.
+
+    The asymmetry is deliberate. Raising is a decision the operator makes by pressing the
+    button on the files the filters match; lowering is arithmetic on what is there. So
+    this never sets a flag to 1, and a scanned file whose song was never added stays
+    unflagged until the operator adds it.
+
+    Runs on every `init_db`, which is also what repairs a database written before this
+    rule, where an OpenTune backup and the download history had both raised the flag.
+    """
+    if not (_table_exists(conn, "songs") and _table_exists(conn, "local_files")):
+        return 0
+    cursor = conn.execute(
+        """
+        UPDATE songs SET downloaded = 0, last_updated = ?
+        WHERE downloaded = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM local_files lf
+              WHERE lf.video_id IS NOT NULL AND TRIM(lf.video_id) = songs.video_id
+          )
+        """,
+        (now_string(),),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def clear_stale_downloaded_flags(db_path: str) -> int:
+    """`_clear_stale_downloaded` for a caller that has a path rather than a connection."""
+    with _connect(db_path) as conn:
+        return _clear_stale_downloaded(conn)
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
@@ -266,12 +305,6 @@ def _backfill_music_tables(conn: sqlite3.Connection) -> None:
         return
 
     stamp = now_string()
-    downloaded = {
-        str(row[0])
-        for row in conn.execute(
-            "SELECT DISTINCT video_id FROM downloads WHERE status = 'success' AND video_id IS NOT NULL"
-        )
-    }
 
     songs: dict[str, tuple] = {}
     artists: dict[str, str] = {}
@@ -289,7 +322,11 @@ def _backfill_music_tables(conn: sqlite3.Connection) -> None:
             row["thumbnail_url"],
             row["video_url"] or f"https://www.youtube.com/watch?v={video_id}",
             row["upload_date"],
-            1 if video_id in downloaded else 0,
+            # `downloaded` starts at 0 for every revived row (FSD 1.8.4). This seeded
+            # from the download history once, which was the wrong evidence: history
+            # records that a file was written, and the flag has to mean the file is in
+            # the local music library now. Local Scan is what establishes that.
+            0,
             stamp,
             stamp,
         )
@@ -623,6 +660,7 @@ def init_db(db_path: str) -> None:
         _drop_retired_columns(conn)
         _backfill_relations(conn)
         _backfill_music_tables(conn)
+        _clear_stale_downloaded(conn)
 
         # Drop columns no longer needed
         columns = _table_columns(conn, "youtube_video_information")
@@ -682,8 +720,8 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
     means "this source knows nothing about artists", which is not the same as "this song
     has no artists", and silently deleting the credits would be the worse reading.
 
-    `liked` is the one field that overrides instead of merging, and only when the payload
-    names it. See the comment beside that statement for why it differs from `downloaded`.
+    `liked` and `downloaded` override instead of merging, and only when the payload names
+    them. See the comment beside those statements for why neither can use MAX.
     """
     if not payloads:
         return 0
@@ -727,7 +765,6 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                     upload_date = COALESCE(NULLIF(excluded.upload_date, ''), songs.upload_date),
                     album_id = COALESCE(excluded.album_id, songs.album_id),
                     in_library = MAX(songs.in_library, excluded.in_library),
-                    downloaded = MAX(songs.downloaded, excluded.downloaded),
                     bitrate_label = COALESCE(NULLIF(excluded.bitrate_label, ''), songs.bitrate_label),
                     last_updated = excluded.last_updated
                 """,
@@ -748,17 +785,23 @@ def upsert_songs(db_path: str, payloads: list[dict[str, Any]]) -> int:
                 ),
             )
 
-            # `liked` overrides rather than merges, and only when the payload names it.
-            # A backup is the sole authority on what is liked, so unliking a song on the
-            # phone has to come back through here as a 0; MAX, which `downloaded` uses,
-            # would make the flag one-way and unliking impossible. The insert above sets
-            # the value for a brand new row and this statement settles an existing one.
-            # A source that says nothing about likes leaves the stored flag alone.
-            if "liked" in payload:
-                conn.execute(
-                    "UPDATE songs SET liked = ? WHERE video_id = ?",
-                    (1 if payload["liked"] else 0, video_id),
-                )
+            # `liked` and `downloaded` override rather than merge, and only when the
+            # payload names them. A source that stays silent leaves the stored flag
+            # alone; the insert above sets the value for a brand new row and these
+            # statements settle an existing one.
+            #
+            # Both were MAX once, which made them one-way. That is wrong for each, for
+            # its own reason. A backup is the sole authority on what is liked, so
+            # unliking a song on the phone has to come back through here as a 0. And
+            # `downloaded` means the file is in the local music library (FSD 1.8.4), so
+            # it has to fall when the file goes; only the Local Scan names it, because
+            # only the Local Scan has looked at this disk.
+            for column in ("liked", "downloaded"):
+                if column in payload:
+                    conn.execute(
+                        f"UPDATE songs SET {column} = ? WHERE video_id = ?",
+                        (1 if payload[column] else 0, video_id),
+                    )
 
             if album_key:
                 conn.execute(
